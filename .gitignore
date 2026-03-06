@@ -1,0 +1,7 @@
+node_modules/
+out/
+target/
+*.eif
+*.cpio
+*.pcrs
+.env

@@ -1,0 +1,11 @@
+[package]
+name = "nsm-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nsm_api = { git = "https://github.com/aws/aws-nitro-enclaves-nsm-api.git/", rev = "8ec7eac72bbb2097f1058ee32c13e1ff232f13e8", package = "aws-nitro-enclaves-nsm-api" }
+serde_bytes = "0.11"
