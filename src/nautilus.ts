@@ -8,10 +8,10 @@
  *
  * const app = new Nautilus();
  *
- * app.route("POST", "/process", async (req, ctx) => {
+ * // Add your routes here
+ * app.post("/my_endpoint", async (req, ctx) => {
  *   const body = await req.json();
- *   const signed = ctx.sign(Buffer.from(JSON.stringify(body)));
- *   return Response.json({ data: body, signature: ctx.toHex(signed) });
+ *   return Response.json({ received: body });
  * });
  *
  * app.start();
@@ -35,8 +35,6 @@ import {
 import { isEnclave, getAttestation, getHardwareRandom } from "./nsm/index.ts";
 
 export interface NautilusContext {
-  /** Ephemeral Ed25519 keypair, generated at boot. */
-  keypair: Keypair;
   /** Hex-encoded public key. */
   publicKey: string;
   /** Sui address derived from the public key. */
@@ -173,7 +171,6 @@ export class Nautilus {
     console.log(`[nautilus] address:    ${address}`);
 
     const ctx: NautilusContext = {
-      keypair,
       publicKey,
       address,
       config,

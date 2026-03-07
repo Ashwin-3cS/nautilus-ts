@@ -135,6 +135,18 @@ describe("validateBootConfig", () => {
     expect(() => validateBootConfig({ endpoints: [{ host: "a".repeat(254), vsock_port: 100 }] })).toThrow("host must be a non-empty string");
   });
 
+  test("rejects endpoint host with whitespace", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "evil.com localhost", vsock_port: 100 }] })).toThrow("invalid characters");
+  });
+
+  test("rejects endpoint host with newline", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "evil.com\n127.0.0.1 admin", vsock_port: 100 }] })).toThrow("invalid characters");
+  });
+
+  test("rejects endpoint host with tab", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "evil.com\tlocalhost", vsock_port: 100 }] })).toThrow("invalid characters");
+  });
+
   test("rejects endpoint with non-integer port", () => {
     expect(() => validateBootConfig({ endpoints: [{ host: "sui.io", vsock_port: 1.5 }] })).toThrow("vsock_port must be an integer in 1..65535");
   });

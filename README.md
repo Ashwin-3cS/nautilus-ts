@@ -143,7 +143,7 @@ The enclave receives configuration at boot via VSOCK port 7777:
 
 - `endpoints`: External services the enclave needs to reach. Each gets a VSOCK-forwarded loopback address.
 - `app`: Arbitrary application config, available via `ctx.config.app` in your route handlers.
-- `secrets`: Key-value pairs injected into `process.env`.
+- `secrets`: Key-value pairs available via `ctx.config.secrets` in route handlers.
 
 ## Writing Routes
 
@@ -236,7 +236,7 @@ Yes. The framework provides generic enclave utilities (attestation, signing, has
 
 ### How do I pass secrets to the enclave?
 
-Include a `secrets` object in the boot config sent via VSOCK:7777. These are injected into `process.env` at startup. Note that the boot config is sent by the host, so secrets are only as secure as your trust model. For highly sensitive material, consider using Seal encryption with the enclave's attestation-bound identity.
+Include a `secrets` object in the boot config sent via VSOCK:7777. These are available to route handlers via `ctx.config.secrets`. They are not injected into `process.env`. Note that the boot config is sent by the host, so secrets are only as secure as your trust model. For highly sensitive material, consider using Seal encryption with the enclave's attestation-bound identity.
 
 ### Is the Rust traffic forwarder necessary? Can I use Python's traffic_forwarder.py?
 

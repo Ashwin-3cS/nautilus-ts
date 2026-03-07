@@ -44,6 +44,9 @@ export function validateBootConfig(raw: unknown): BootConfig {
     if (typeof host !== "string" || host.length === 0 || host.length > 253) {
       throw new Error(`boot config: endpoints[${i}].host must be a non-empty string (max 253 chars)`);
     }
+    if (!/^[a-zA-Z0-9._-]+$/.test(host)) {
+      throw new Error(`boot config: endpoints[${i}].host contains invalid characters`);
+    }
     if (typeof vsock_port !== "number" || !Number.isInteger(vsock_port) || vsock_port < 1 || vsock_port > 65535) {
       throw new Error(`boot config: endpoints[${i}].vsock_port must be an integer in 1..65535`);
     }
@@ -86,12 +89,16 @@ export async function receiveBootConfig(): Promise<BootConfig> {
 
   console.log("[config] waiting for boot config on VSOCK:7777...");
   const listenFd = vsockListen(7777);
-  const clientFd = vsockAccept(listenFd);
-  const data = vsockReadAll(clientFd);
-  vsockClose(clientFd);
-  vsockClose(listenFd);
+  let clientFd: number | undefined;
+  try {
+    clientFd = vsockAccept(listenFd);
+    const data = vsockReadAll(clientFd);
+    var json = data.toString("utf-8");
+  } finally {
+    if (clientFd !== undefined) vsockClose(clientFd);
+    vsockClose(listenFd);
+  }
 
-  const json = data.toString("utf-8");
   console.log(`[config] received ${json.length} bytes`);
 
   const config = validateBootConfig(JSON.parse(json));
