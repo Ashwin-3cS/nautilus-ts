@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { devBootConfig } from "../src/core/config.ts";
+import { devBootConfig, validateBootConfig } from "../src/core/config.ts";
 import type { BootConfig } from "../src/core/config.ts";
 
 describe("devBootConfig", () => {
@@ -82,5 +82,110 @@ describe("BootConfig shape", () => {
     }));
     const config = await devBootConfig(tmpPath);
     expect(config.endpoints).toHaveLength(3);
+  });
+});
+
+describe("validateBootConfig", () => {
+  const valid: BootConfig = {
+    endpoints: [{ host: "sui.io", vsock_port: 8443 }],
+    secrets: { API_KEY: "test" },
+    log_level: "debug",
+    app: { foo: "bar" },
+  };
+
+  test("accepts valid full config", () => {
+    expect(validateBootConfig(valid)).toEqual(valid);
+  });
+
+  test("accepts minimal config", () => {
+    expect(validateBootConfig({ endpoints: [] })).toEqual({ endpoints: [] });
+  });
+
+  // top-level shape
+  test("rejects null", () => {
+    expect(() => validateBootConfig(null)).toThrow("must be a JSON object");
+  });
+
+  test("rejects array", () => {
+    expect(() => validateBootConfig([])).toThrow("must be a JSON object");
+  });
+
+  test("rejects string", () => {
+    expect(() => validateBootConfig("hello")).toThrow("must be a JSON object");
+  });
+
+  // endpoints
+  test("rejects missing endpoints", () => {
+    expect(() => validateBootConfig({})).toThrow("endpoints must be an array");
+  });
+
+  test("rejects non-array endpoints", () => {
+    expect(() => validateBootConfig({ endpoints: "oops" })).toThrow("endpoints must be an array");
+  });
+
+  test("rejects endpoint with missing host", () => {
+    expect(() => validateBootConfig({ endpoints: [{ vsock_port: 100 }] })).toThrow("host must be a non-empty string");
+  });
+
+  test("rejects endpoint with empty host", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "", vsock_port: 100 }] })).toThrow("host must be a non-empty string");
+  });
+
+  test("rejects endpoint with oversized host", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "a".repeat(254), vsock_port: 100 }] })).toThrow("host must be a non-empty string");
+  });
+
+  test("rejects endpoint with non-integer port", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "sui.io", vsock_port: 1.5 }] })).toThrow("vsock_port must be an integer in 1..65535");
+  });
+
+  test("rejects endpoint with port 0", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "sui.io", vsock_port: 0 }] })).toThrow("vsock_port must be an integer in 1..65535");
+  });
+
+  test("rejects endpoint with port > 65535", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "sui.io", vsock_port: 70000 }] })).toThrow("vsock_port must be an integer in 1..65535");
+  });
+
+  test("rejects endpoint with negative port", () => {
+    expect(() => validateBootConfig({ endpoints: [{ host: "sui.io", vsock_port: -1 }] })).toThrow("vsock_port must be an integer in 1..65535");
+  });
+
+  test("rejects endpoint that is not an object", () => {
+    expect(() => validateBootConfig({ endpoints: ["bad"] })).toThrow("endpoints[0] must be an object");
+  });
+
+  // secrets
+  test("rejects non-object secrets", () => {
+    expect(() => validateBootConfig({ endpoints: [], secrets: "bad" })).toThrow("secrets must be a string-to-string map");
+  });
+
+  test("rejects array secrets", () => {
+    expect(() => validateBootConfig({ endpoints: [], secrets: ["a"] })).toThrow("secrets must be a string-to-string map");
+  });
+
+  test("rejects non-string secret value", () => {
+    expect(() => validateBootConfig({ endpoints: [], secrets: { key: 123 } })).toThrow('secrets["key"] must be a string');
+  });
+
+  // log_level
+  test("rejects non-string log_level", () => {
+    expect(() => validateBootConfig({ endpoints: [], log_level: 5 })).toThrow("log_level must be a string");
+  });
+
+  // app
+  test("rejects non-object app", () => {
+    expect(() => validateBootConfig({ endpoints: [], app: "bad" })).toThrow("app must be an object");
+  });
+
+  test("rejects array app", () => {
+    expect(() => validateBootConfig({ endpoints: [], app: [1, 2] })).toThrow("app must be an object");
+  });
+
+  // devBootConfig validates too
+  test("devBootConfig rejects invalid config from file", async () => {
+    const tmpPath = "/tmp/nautilus-test-invalid-shape.json";
+    await Bun.write(tmpPath, JSON.stringify({ endpoints: "not-an-array" }));
+    expect(devBootConfig(tmpPath)).rejects.toThrow("endpoints must be an array");
   });
 });

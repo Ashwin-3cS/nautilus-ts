@@ -72,9 +72,11 @@ export function toHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
 }
 
-/** Hex decode (handles 0x prefix). */
+/** Hex decode (handles 0x prefix). Throws on invalid input. */
 export function fromHex(hex: string): Uint8Array {
   const s = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (s.length % 2 !== 0) throw new Error("fromHex: odd-length input");
+  if (s.length > 0 && !/^[0-9a-fA-F]+$/.test(s)) throw new Error("fromHex: invalid hex characters");
   return new Uint8Array(Buffer.from(s, "hex"));
 }
 

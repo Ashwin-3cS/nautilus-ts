@@ -232,7 +232,7 @@ export class Nautilus {
         } catch (e: any) {
           console.error(`[nautilus] ${method} ${path} error:`, e);
           return Response.json(
-            { error: e.message ?? "internal error" },
+            { error: inEnclave ? "internal error" : (e.message ?? "internal error") },
             { status: 500 },
           );
         }

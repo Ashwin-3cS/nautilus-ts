@@ -5,7 +5,7 @@
  */
 
 export type { BootConfig, Endpoint } from "./config.ts";
-export { receiveBootConfig, devBootConfig } from "./config.ts";
+export { receiveBootConfig, devBootConfig, validateBootConfig } from "./config.ts";
 export { setupLoopback } from "./network.ts";
 export type { Keypair } from "./crypto.ts";
 export {

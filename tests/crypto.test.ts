@@ -180,6 +180,23 @@ describe("toHex and fromHex", () => {
     const sig = sign(kp, new Uint8Array([1]));
     expect(fromHex(toHex(sig))).toEqual(sig);
   });
+
+  test("fromHex rejects odd-length input", () => {
+    expect(() => fromHex("0")).toThrow("odd-length");
+    expect(() => fromHex("abc")).toThrow("odd-length");
+    expect(() => fromHex("0x0")).toThrow("odd-length");
+  });
+
+  test("fromHex rejects invalid hex characters", () => {
+    expect(() => fromHex("zz")).toThrow("invalid hex");
+    expect(() => fromHex("gh")).toThrow("invalid hex");
+    expect(() => fromHex("0xzz")).toThrow("invalid hex");
+    expect(() => fromHex("hello!")).toThrow("invalid hex");
+  });
+
+  test("fromHex accepts valid uppercase", () => {
+    expect(fromHex("DEADBEEF")).toEqual(new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+  });
 });
 
 describe("blake2b256", () => {

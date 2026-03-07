@@ -83,13 +83,18 @@ export function vsockAccept(listenFd: number): number {
   return clientFd;
 }
 
-/** Read all data from a fd until EOF (blocking). */
-export function vsockReadAll(fd: number): Buffer {
+/** Read all data from a fd until EOF (blocking). Aborts if maxBytes is exceeded. */
+export function vsockReadAll(fd: number, maxBytes = 1024 * 1024): Buffer {
   const chunks: Buffer[] = [];
   const buf = Buffer.alloc(4096);
+  let total = 0;
   for (;;) {
     const n = Number(libc.symbols.read(fd, ptr(buf), 4096));
     if (n <= 0) break;
+    total += n;
+    if (total > maxBytes) {
+      throw new Error(`vsockReadAll: exceeded ${maxBytes} byte limit`);
+    }
     chunks.push(Buffer.from(buf.subarray(0, n)));
   }
   return Buffer.concat(chunks);
