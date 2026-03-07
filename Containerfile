@@ -34,7 +34,7 @@ RUN apk add --no-cache libstdc++ libgcc
 FROM oven/bun:1-alpine@sha256:32f1fcccb1523960b254c4f80973bee1a910d60be000a45c20c9129a1efcffee AS bun-deps
 WORKDIR /app
 COPY package.json bun.lock* /app/
-RUN bun install --frozen-lockfile --no-progress
+RUN bun install --frozen-lockfile --no-progress --ignore-scripts
 
 FROM oven/bun:1-alpine@sha256:32f1fcccb1523960b254c4f80973bee1a910d60be000a45c20c9129a1efcffee AS bun-build
 WORKDIR /app
