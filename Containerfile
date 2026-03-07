@@ -27,16 +27,16 @@ FROM stagex/user-cpio@sha256:9c8bf39001eca8a71d5617b46f8c9b4f7426db41a052f198d73
 FROM stagex/user-nit@sha256:60b6eef4534ea6ea78d9f29e4c7feb27407b615424f20ad8943d807191688be7 AS user-nit
 
 # --- Shared libs needed by Bun compiled binary ---
-FROM alpine:3.19 AS alpine-libs
+FROM alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 AS alpine-libs
 RUN apk add --no-cache libstdc++ libgcc
 
 # --- Build Bun standalone binary ---
-FROM oven/bun:1-alpine AS bun-deps
+FROM oven/bun:1-alpine@sha256:32f1fcccb1523960b254c4f80973bee1a910d60be000a45c20c9129a1efcffee AS bun-deps
 WORKDIR /app
 COPY package.json bun.lock* /app/
 RUN bun install --frozen-lockfile --no-progress 2>/dev/null || bun install --no-progress
 
-FROM oven/bun:1-alpine AS bun-build
+FROM oven/bun:1-alpine@sha256:32f1fcccb1523960b254c4f80973bee1a910d60be000a45c20c9129a1efcffee AS bun-build
 WORKDIR /app
 COPY --from=bun-deps /app/node_modules /app/node_modules
 COPY src/ /app/src/
@@ -65,9 +65,9 @@ COPY enclave/traffic-forwarder /build/traffic-forwarder
 ENV OPENSSL_STATIC=true
 ENV TARGET=x86_64-unknown-linux-musl
 WORKDIR /build/nsm-ffi
-RUN cargo build --release --target "$TARGET"
+RUN cargo build --release --locked --target "$TARGET"
 WORKDIR /build/traffic-forwarder
-RUN cargo build --release --target "$TARGET"
+RUN cargo build --release --locked --target "$TARGET"
 
 # --- Assemble initramfs ---
 FROM scratch AS base

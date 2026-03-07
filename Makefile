@@ -13,6 +13,7 @@ out/nitro.eif: $(SRC_FILES) Containerfile package.json | out
 	docker build \
 		--tag $(REGISTRY)/nautilus-ts \
 		--platform linux/amd64 \
+		--provenance=false \
 		--output type=local,rewrite-timestamp=true,dest=out \
 		-f Containerfile \
 		.

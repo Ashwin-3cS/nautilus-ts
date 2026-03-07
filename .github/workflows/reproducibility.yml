@@ -1,0 +1,13 @@
+name: Reproducibility Check
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4.2.2
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f3de0a9e1ade3110295498 # pin@v2.0.2
+      - run: bun scripts/check-reproducibility.ts

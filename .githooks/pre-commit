@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-commit hook: verify build reproducibility before committing.
+# Install: git config core.hooksPath .githooks
+
+if command -v bun &>/dev/null; then
+    bun scripts/check-reproducibility.ts
+else
+    echo "Warning: bun not found, skipping reproducibility check"
+fi

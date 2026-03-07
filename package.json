@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "bun --hot src/server.ts",
     "build": "make",
-    "start": "bun src/server.ts"
+    "start": "bun src/server.ts",
+    "check": "bun scripts/check-reproducibility.ts",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@mysten/sui": "^2",
+    "@mysten/sui": "^2.6.0",
     "@noble/ed25519": "^2.2.3",
     "@noble/hashes": "^1.7.2"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.3.10"
   }
 }
