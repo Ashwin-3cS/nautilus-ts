@@ -22,9 +22,21 @@ export interface Keypair {
   publicKey: Uint8Array;
 }
 
-/** Generate a new Ed25519 keypair. */
-export function generateKeypair(): Keypair {
-  const privateKey = ed.utils.randomPrivateKey();
+/**
+ * Generate a new Ed25519 keypair.
+ * Mixes NSM hardware entropy (if available) with crypto.getRandomValues()
+ * so that neither source alone can determine the key.
+ */
+export function generateKeypair(nsmEntropy?: Uint8Array | null): Keypair {
+  const osRandom = ed.utils.randomPrivateKey(); // 32 bytes from crypto.getRandomValues()
+  let privateKey: Uint8Array;
+  if (nsmEntropy && nsmEntropy.length >= 32) {
+    // XOR: both sources must be compromised to predict the key
+    privateKey = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) privateKey[i] = osRandom[i] ^ nsmEntropy[i];
+  } else {
+    privateKey = osRandom;
+  }
   const publicKey = ed.getPublicKey(privateKey);
   return { privateKey, publicKey };
 }

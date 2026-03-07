@@ -180,6 +180,80 @@ The `ctx` object provides:
 - `ctx.attest()` — NSM attestation document (enclave only)
 - `ctx.toHex()` / `ctx.fromHex()` / `ctx.blake2b256()` / `ctx.sha256()` — Crypto utilities
 
+## FAQ
+
+### How does the enclave access the NSM for attestation?
+
+The NSM (Nitro Secure Module) is accessed via ioctl on `/dev/nsm`. Since JavaScript can't do ioctl directly, we compile a minimal Rust shared library (`libnsm_ffi.so`) that wraps the `aws-nitro-enclaves-nsm-api` crate. TypeScript calls it through `bun:ffi`. You could also do this from bash, Python, or any language that can open a device file and issue ioctls — Rust is just the cleanest option for a compiled cdylib.
+
+### Does the TypeScript code know it's inside an enclave?
+
+Mostly no, by design. Your `fetch("https://fullnode.testnet.sui.io/...")` calls resolve normally — `/etc/hosts` maps hostnames to loopback addresses, and the Rust traffic forwarder bridges those to VSOCK transparently. The only enclave-aware code is the boot sequence and the `ctx.attest()` call. Your business logic reads like a normal TypeScript server.
+
+### Should I assume the EC2 host is malicious?
+
+Yes. The host controls the network, can inspect or modify unencrypted traffic, and sends the boot configuration. This is exactly why enclaves exist — the attestation document cryptographically proves what code is running and binds your ephemeral public key to that measurement. Design your protocol so that all trust flows from the attestation, not from the host.
+
+### How does the enclave handle TLS certificates?
+
+Trusted CA certificates from StageX's `core-ca-certificates` package are baked into the EIF image at build time. The environment variables `SSL_CERT_FILE` and `SSL_CERT_DIR` point to these embedded certs. Since they're part of the measured image (reflected in PCR values), the host cannot replace or tamper with them. All outbound HTTPS connections verify against these embedded roots.
+
+### Can the host tamper with inbound HTTP requests to the enclave?
+
+Yes — inbound traffic from the host to the enclave's HTTP server is unencrypted (it travels over VSOCK, which is a local hypervisor channel, not a network). This is by design and matches Mysten's official implementation. The security model relies on the enclave **signing its responses** with its attestation-bound keypair. The on-chain Move contract verifies that signature, so it doesn't matter if the host tampers with requests — only correctly signed enclave outputs are accepted on-chain.
+
+### How is the ephemeral keypair generated? Is it secure?
+
+The keypair is generated at boot by mixing two independent entropy sources: `crypto.getRandomValues()` (kernel PRNG) and the NSM hardware RNG (`/dev/nsm`). These are XORed together, so both sources must be compromised to predict the key. In dev mode (no NSM), only the kernel PRNG is used. The keypair is ephemeral — it lives only in enclave memory and is destroyed when the enclave terminates.
+
+### Are builds reproducible? Will PCR values be the same?
+
+Yes, given identical source code and lockfiles. All Docker base images are pinned by SHA256 digest, Cargo.lock and bun.lock are committed, `cargo build --locked` and `bun install --frozen-lockfile` are enforced, file timestamps are zeroed, and cpio archives are built with deterministic ordering. Run `bun scripts/check-reproducibility.ts` to verify that nothing has drifted. The same source should produce the same PCR0/PCR1/PCR2 measurements on any machine.
+
+### What are the PCR values and how do I verify them?
+
+PCR0 measures the enclave image (your code + all dependencies). PCR1 measures the kernel. PCR2 measures the application. After building (`make`), the measurements are written to `out/nitro.pcrs`. Anyone can clone the repo, run `make`, and compare their PCR values against yours. If they match, the enclave is running the published source code.
+
+### Can I add more external endpoints?
+
+Yes. Add entries to the `endpoints` array in your boot config and set up corresponding `vsock-proxy` instances on the host. Each endpoint gets a unique loopback IP (`127.0.0.64`, `127.0.0.65`, etc.) and an entry in `/etc/hosts`. Your code just calls `fetch("https://your-service.com/...")` as usual.
+
+### Why Bun instead of Node.js?
+
+Bun compiles TypeScript into a single standalone binary via `bun build --compile`. This binary includes the runtime, all npm dependencies, and your code — no `node_modules` directory, no package manager, no interpreter needed inside the enclave. It also has native FFI support (`bun:ffi`) which we use for both VSOCK and NSM access.
+
+### Why not just use the official Mysten Nautilus (Rust)?
+
+You can and should if Rust is your preference. This template exists for teams that want to write their enclave business logic in TypeScript using Mysten's TypeScript SDKs. The trade-off is a slightly larger image (Bun runtime + Rust components vs pure Rust) in exchange for faster iteration and access to the TypeScript ecosystem.
+
+### What happens if the traffic forwarder crashes?
+
+The Bun process monitors the traffic forwarder as a child process. If it exits, Bun logs the error and calls `process.exit(1)`, which terminates the enclave. This is intentional — silently losing network connectivity is worse than a clean restart.
+
+### Can I use this without Sui?
+
+Yes. The framework provides generic enclave utilities (attestation, signing, hashing, encrypted config). The Sui-specific parts (`@mysten/sui`, `suiAddress()`) are optional — remove them from `package.json` and `crypto.ts` if you don't need them.
+
+### How do I pass secrets to the enclave?
+
+Include a `secrets` object in the boot config sent via VSOCK:7777. These are injected into `process.env` at startup. Note that the boot config is sent by the host, so secrets are only as secure as your trust model. For highly sensitive material, consider using Seal encryption with the enclave's attestation-bound identity.
+
+### Is the Rust traffic forwarder necessary? Can I use Python's traffic_forwarder.py?
+
+You can, but we don't recommend it. The Python forwarder adds ~40MB to the image, uses blocking threads, and requires the Python runtime. Our Rust forwarder is a 2MB static binary with async I/O. It also means one fewer language runtime in your attack surface.
+
+### How does this compare to Mysten's Nautilus for reproducibility?
+
+Both implementations use the same StageX-based reproducible build pipeline: SHA256-pinned images, deterministic cpio (zeroed timestamps, sorted entries, `--reproducible` flag), `eif_build` for the final EIF, and `--provenance=false` in Docker. This template additionally includes an automated reproducibility verification script and CI workflow.
+
+### Why generate a new keypair on every boot instead of loading one?
+
+This is fundamental to the enclave security model. The attestation document binds the public key to the enclave's PCR measurements, proving "this key was generated inside code with these exact measurements." If you loaded a key from the host (e.g., `.env` or config), the host would know the private key, and the attestation would prove nothing — the host could sign anything. Ephemeral keys generated inside the enclave's isolated memory are the only kind that the attestation can meaningfully vouch for. The trade-off is that the enclave's Sui address changes on every reboot and must be re-approved on-chain.
+
+### Can I run this locally for development?
+
+Yes. `bun run dev` starts the server in dev mode — no enclave, no VSOCK, no NSM. It reads config from a local file (or uses defaults), generates a keypair from the kernel PRNG, and listens on `localhost:3000`. The `ctx.attest()` call returns `null` in dev mode.
+
 ## Disclaimer
 
 This framework is provided as-is and has not been audited. We are not responsible for any issues arising from its use. Use at your own risk.

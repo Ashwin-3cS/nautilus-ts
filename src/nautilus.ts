@@ -32,7 +32,7 @@ import {
   blake2b256,
   sha256Hash,
 } from "./core/index.ts";
-import { isEnclave, getAttestation } from "./nsm/index.ts";
+import { isEnclave, getAttestation, getHardwareRandom } from "./nsm/index.ts";
 
 export interface NautilusContext {
   /** Ephemeral Ed25519 keypair, generated at boot. */
@@ -163,8 +163,9 @@ export class Nautilus {
       config = await devBootConfig(this.configPath);
     }
 
-    // Generate ephemeral keypair
-    const keypair = generateKeypair();
+    // Generate ephemeral keypair (mix NSM hardware entropy when available)
+    const nsmEntropy = inEnclave ? getHardwareRandom() : null;
+    const keypair = generateKeypair(nsmEntropy);
     const publicKey = toHex(keypair.publicKey);
     const address = suiAddress(keypair.publicKey);
 
