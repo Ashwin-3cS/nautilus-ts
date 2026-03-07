@@ -25,7 +25,7 @@ Write your enclave business logic in TypeScript using Mysten's SDKs (`@mysten/su
 └───────────────────── VSOCK boundary ──────────────────┘
          ↕                              ↕
 ┌──────── EC2 Host ─────────────────────────────────────┐
-│  socat TCP:8080 ↔ VSOCK:3000     (inbound HTTP)      │
+│  host-forwarder TCP:8080 ↔ VSOCK:3000 (inbound HTTP) │
 │  vsock-proxy VSOCK:8101 ↔ seal.mirai.cloud:443       │
 │  vsock-proxy VSOCK:8103 ↔ walrus.space:443           │
 │  vsock-proxy VSOCK:8104 ↔ fullnode.sui.io:443        │
@@ -117,7 +117,9 @@ src/
     index.ts         # NSM attestation via Rust FFI
 enclave/
   nsm-ffi/           # Rust cdylib for /dev/nsm attestation
-  traffic-forwarder/ # Rust binary for TCP↔VSOCK bridging
+  traffic-forwarder/ # Rust binary for TCP↔VSOCK bridging (runs inside enclave)
+host/
+  forwarder/         # Rust binary for TCP→VSOCK inbound bridge (runs on EC2 host)
 scripts/
   deploy.sh          # EC2 deployment script
   systemd/           # systemd units for host services
@@ -237,6 +239,12 @@ Yes. The framework provides generic enclave utilities (attestation, signing, has
 ### How do I pass secrets to the enclave?
 
 Include a `secrets` object in the boot config sent via VSOCK:7777. These are available to route handlers via `ctx.config.secrets`. They are not injected into `process.env`. Note that the boot config is sent by the host, so secrets are only as secure as your trust model. For highly sensitive material, consider using Seal encryption with the enclave's attestation-bound identity.
+
+### Why not use socat for the host-side bridge?
+
+[Mysten's official Nautilus](https://github.com/MystenLabs/nautilus/blob/main/expose_enclave.sh) and most Nitro Enclave tutorials use `socat TCP-LISTEN:port,fork VSOCK-CONNECT:cid:port` on the parent EC2 to bridge inbound HTTP traffic. socat's `fork` mode creates a new process and VSOCK connection for every incoming TCP connection, and under rapid sequential connections the VSOCK socket can race, causing `Transport endpoint is not connected` errors.
+
+We ship `host-forwarder`, a small Rust binary (`host/forwarder/`) that replaces socat for inbound traffic. It uses tokio async tasks instead of forking, eliminating the race. Usage: `host-forwarder <listen-port> <enclave-cid> <vsock-port>`.
 
 ### Is the Rust traffic forwarder necessary? Can I use Python's traffic_forwarder.py?
 

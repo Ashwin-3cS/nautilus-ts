@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # pin@stable
       - run: cargo test --locked --manifest-path enclave/nsm-ffi/Cargo.toml
       - run: cargo test --locked --manifest-path enclave/traffic-forwarder/Cargo.toml
+      - run: cargo test --locked --manifest-path host/forwarder/Cargo.toml
 
   build-eif:
     runs-on: ubuntu-latest
@@ -94,24 +95,36 @@ jobs:
       - name: Install enclave dependencies
         run: |
           ssh -o StrictHostKeyChecking=no -i /tmp/ci-key.pem ec2-user@${{ steps.ec2.outputs.ip }} '
-            sudo dnf install -y aws-nitro-enclaves-cli socat jq
+            sudo dnf install -y aws-nitro-enclaves-cli socat jq gcc
             sudo sed -i "s/^cpu_count:.*/cpu_count: 2/" /etc/nitro_enclaves/allocator.yaml
             sudo sed -i "s/^memory_mib:.*/memory_mib: 4096/" /etc/nitro_enclaves/allocator.yaml
             sudo systemctl enable --now nitro-enclaves-allocator
             sudo usermod -aG ne ec2-user
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           '
 
-      - name: Upload EIF and smoke test
+      - name: Upload files
         run: |
           scp -o StrictHostKeyChecking=no -i /tmp/ci-key.pem \
             out/nitro.eif scripts/enclave-smoke-test.sh \
             ec2-user@${{ steps.ec2.outputs.ip }}:~/
+          scp -r -o StrictHostKeyChecking=no -i /tmp/ci-key.pem \
+            host/forwarder \
+            ec2-user@${{ steps.ec2.outputs.ip }}:~/host-forwarder
+
+      - name: Build host-forwarder
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ci-key.pem ec2-user@${{ steps.ec2.outputs.ip }} '
+            source ~/.cargo/env
+            cd ~/host-forwarder
+            cargo build --release --locked
+          '
 
       - name: Run smoke test
         run: |
           ssh -o StrictHostKeyChecking=no -i /tmp/ci-key.pem ec2-user@${{ steps.ec2.outputs.ip }} '
             chmod +x ~/enclave-smoke-test.sh
-            ~/enclave-smoke-test.sh ~/nitro.eif
+            ~/enclave-smoke-test.sh ~/nitro.eif ~/host-forwarder/target/release/host-forwarder
           '
 
       - name: Terminate instance
