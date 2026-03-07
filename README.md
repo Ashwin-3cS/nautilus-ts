@@ -244,7 +244,7 @@ Include a `secrets` object in the boot config sent via VSOCK:7777. These are ava
 
 [Mysten's official Nautilus](https://github.com/MystenLabs/nautilus/blob/main/expose_enclave.sh) and most Nitro Enclave tutorials use `socat TCP-LISTEN:port,fork VSOCK-CONNECT:cid:port` on the parent EC2 to bridge inbound HTTP traffic. socat's `fork` mode creates a new process and VSOCK connection for every incoming TCP connection, and under rapid sequential connections the VSOCK socket can race, causing `Transport endpoint is not connected` errors.
 
-We ship `host-forwarder`, a small Rust binary (`host/forwarder/`) that replaces socat for inbound traffic. It uses tokio async tasks instead of forking, eliminating the race. Usage: `host-forwarder <listen-port> <enclave-cid> <vsock-port>`.
+We ship `host-forwarder`, a small Rust binary (`host/forwarder/`) that replaces socat for inbound traffic. The Linux VSOCK subsystem itself can transiently timeout under rapid sequential connections regardless of the client — socat surfaces these as client-visible errors, while `host-forwarder` absorbs them with a transparent connect retry loop. Usage: `host-forwarder <listen-port> <enclave-cid> <vsock-port>`.
 
 ### Is the Rust traffic forwarder necessary? Can I use Python's traffic_forwarder.py?
 

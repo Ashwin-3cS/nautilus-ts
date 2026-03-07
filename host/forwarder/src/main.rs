@@ -1,19 +1,23 @@
 //! Host-side forwarder for Nautilus enclaves.
 //!
 //! Replaces `socat TCP-LISTEN:port,fork VSOCK-CONNECT:cid:port` with an
-//! async Rust binary that doesn't fork per connection.
+//! async Rust binary that retries transient VSOCK connection failures
+//! transparently, so the TCP client never sees the error.
 //!
-//! socat's fork-per-connection model creates a new VSOCK connection for every
-//! incoming TCP connection. Under rapid sequential connections the new VSOCK
-//! socket can race, causing "Transport endpoint is not connected" errors.
-//! This binary uses tokio tasks instead of processes, eliminating the race.
+//! The Linux VSOCK subsystem can transiently fail or timeout under rapid
+//! sequential connections. socat surfaces these as client-visible errors;
+//! this binary absorbs them with a connect retry loop.
 //!
 //! Usage:
 //!   host-forwarder <listen-port> <enclave-cid> <vsock-port>
 
+use std::time::Duration;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_vsock::{VsockAddr, VsockStream};
+
+const MAX_CONNECT_ATTEMPTS: u32 = 3;
+const RETRY_DELAY: Duration = Duration::from_millis(200);
 
 #[tokio::main]
 async fn main() {
@@ -62,7 +66,7 @@ async fn main() {
 }
 
 async fn bridge(tcp_stream: TcpStream, cid: u32, vsock_port: u32) -> io::Result<()> {
-    let vsock_stream = VsockStream::connect(VsockAddr::new(cid, vsock_port)).await?;
+    let vsock_stream = vsock_connect(cid, vsock_port).await?;
     let (mut tcp_r, mut tcp_w) = io::split(tcp_stream);
     let (mut vsock_r, mut vsock_w) = io::split(vsock_stream);
 
@@ -74,6 +78,25 @@ async fn bridge(tcp_stream: TcpStream, cid: u32, vsock_port: u32) -> io::Result<
         r = s2c => { r?; }
     }
     Ok(())
+}
+
+/// Connect to the enclave with retries. The Linux VSOCK subsystem can
+/// transiently timeout under rapid sequential connections.
+async fn vsock_connect(cid: u32, port: u32) -> io::Result<VsockStream> {
+    let addr = VsockAddr::new(cid, port);
+    for attempt in 1..=MAX_CONNECT_ATTEMPTS {
+        match VsockStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) if attempt < MAX_CONNECT_ATTEMPTS => {
+                eprintln!(
+                    "[host-forwarder] VSOCK connect attempt {attempt}/{MAX_CONNECT_ATTEMPTS} failed: {e}"
+                );
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
 }
 
 #[cfg(test)]
