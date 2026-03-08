@@ -58,7 +58,7 @@ USER_DATA_FILE=$(mktemp)
 cat > "$USER_DATA_FILE" <<'USERDATA'
 #!/bin/bash
 set -eux
-dnf install -y aws-nitro-enclaves-cli jq curl
+dnf install -y aws-nitro-enclaves-cli jq
 usermod -aG ne ec2-user
 sed -i 's/^memory_mib:.*/memory_mib: 4096/' /etc/nitro_enclaves/allocator.yaml
 sed -i 's/^cpu_count:.*/cpu_count: 2/' /etc/nitro_enclaves/allocator.yaml
