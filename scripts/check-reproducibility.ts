@@ -4,16 +4,14 @@
  *
  * Checks:
  *   1. All Containerfile FROM images use @sha256: digests (excluding scratch & internal stages)
- *   2. Cargo.lock files exist for all Rust crates
- *   3. Cargo builds use --locked flag
- *   4. bun.lock exists
- *   5. Bun install uses --frozen-lockfile
- *   6. Warns about floating versions in package.json
- *   7. Lockfiles not gitignored
- *   8. Go dependency pinning (go.sum exists)
- *   9. Go builds are static and deterministic (CGO_ENABLED=0)
- *  10. Docker build uses --provenance=false (prevents non-deterministic metadata)
- *  11. Initramfs timestamps are zeroed and cpio uses --reproducible
+ *   2. bun.lock exists
+ *   3. Bun install uses --frozen-lockfile
+ *   4. Warns about floating versions in package.json
+ *   5. Lockfiles not gitignored
+ *   6. Go dependency pinning (go.sum exists)
+ *   7. Go builds are static and deterministic (CGO_ENABLED=0)
+ *   8. Docker build uses --provenance=false (prevents non-deterministic metadata)
+ *   9. Initramfs timestamps are zeroed and cpio uses --reproducible
  *
  * Usage: bun scripts/check-reproducibility.ts
  */
@@ -41,7 +39,7 @@ if (!existsSync(CONTAINERFILE)) {
   const content = await Bun.file(CONTAINERFILE).text();
   const lines = content.split("\n");
 
-  // Collect stage aliases (e.g., "rust-base", "build", "base")
+  // Collect stage aliases (e.g., "go-build", "build", "base")
   const stageAliases = new Set<string>();
   for (const line of lines) {
     const match = line.match(/\bAS\s+(\S+)/i);
@@ -73,54 +71,8 @@ if (!existsSync(CONTAINERFILE)) {
 }
 console.log();
 
-// --- 2. Cargo.lock files ---
-console.log("2. Cargo.lock files");
-const cargoGlob = new Glob("**/Cargo.toml");
-const cargoTomls: string[] = [];
-for await (const path of cargoGlob.scan({ cwd: REPO_ROOT, absolute: true })) {
-  if (!path.includes("/target/")) cargoTomls.push(path);
-}
-
-if (cargoTomls.length === 0) {
-  pass("No Rust crates found (nothing to check)");
-} else {
-  for (const toml of cargoTomls) {
-    const dir = dirname(toml);
-    const crate = basename(dir);
-    if (existsSync(resolve(dir, "Cargo.lock"))) {
-      pass(`${crate}/Cargo.lock exists`);
-    } else {
-      fail(`${crate}/Cargo.lock missing — run 'cargo generate-lockfile' in ${dir}`);
-    }
-  }
-}
-console.log();
-
-// --- 3. Cargo builds use --locked ---
-console.log("3. Cargo --locked flag");
-if (existsSync(CONTAINERFILE)) {
-  const content = await Bun.file(CONTAINERFILE).text();
-  const cargoBuilds = content.split("\n").filter(l => l.includes("cargo build"));
-
-  if (cargoBuilds.length === 0) {
-    pass("No cargo build commands in Containerfile");
-  } else {
-    let allLocked = true;
-    for (const line of cargoBuilds) {
-      if (!line.includes("--locked")) {
-        fail(`Missing --locked: ${line.trim()}`);
-        allLocked = false;
-      }
-    }
-    if (allLocked) {
-      pass(`All ${cargoBuilds.length} cargo build commands use --locked`);
-    }
-  }
-}
-console.log();
-
-// --- 4. bun.lock ---
-console.log("4. Bun lockfile");
+// --- 2. bun.lock ---
+console.log("2. Bun lockfile");
 if (existsSync(resolve(REPO_ROOT, "bun.lock")) || existsSync(resolve(REPO_ROOT, "bun.lockb"))) {
   pass("bun.lock exists");
 } else {
@@ -128,8 +80,8 @@ if (existsSync(resolve(REPO_ROOT, "bun.lock")) || existsSync(resolve(REPO_ROOT, 
 }
 console.log();
 
-// --- 5. Bun install uses --frozen-lockfile ---
-console.log("5. Bun --frozen-lockfile flag");
+// --- 3. Bun install uses --frozen-lockfile ---
+console.log("3. Bun --frozen-lockfile flag");
 if (existsSync(CONTAINERFILE)) {
   const content = await Bun.file(CONTAINERFILE).text();
   const bunInstalls = content.split("\n").filter(l => l.includes("bun install"));
@@ -153,8 +105,8 @@ if (existsSync(CONTAINERFILE)) {
 }
 console.log();
 
-// --- 6. package.json floating versions ---
-console.log("6. package.json version pinning");
+// --- 4. package.json floating versions ---
+console.log("4. package.json version pinning");
 const pkgPath = resolve(REPO_ROOT, "package.json");
 if (existsSync(pkgPath)) {
   const pkg = await Bun.file(pkgPath).json();
@@ -179,13 +131,13 @@ if (existsSync(pkgPath)) {
 }
 console.log();
 
-// --- 7. Lockfiles not gitignored ---
-console.log("7. Lockfiles not gitignored");
+// --- 5. Lockfiles not gitignored ---
+console.log("5. Lockfiles not gitignored");
 const gitignorePath = resolve(REPO_ROOT, ".gitignore");
 if (existsSync(gitignorePath)) {
   const gitignore = await Bun.file(gitignorePath).text();
   const ignoredLocks = gitignore.split("\n").filter(l =>
-    /^(bun\.lock|bun\.lockb|Cargo\.lock)/.test(l.trim())
+    /^(bun\.lock|bun\.lockb)/.test(l.trim())
   );
   if (ignoredLocks.length > 0) {
     fail(`Lockfiles are gitignored — they must be committed for reproducible builds: ${ignoredLocks.join(", ")}`);
@@ -197,8 +149,8 @@ if (existsSync(gitignorePath)) {
 }
 console.log();
 
-// --- 8. Go dependency pinning ---
-console.log("8. Go dependency pinning");
+// --- 6. Go dependency pinning ---
+console.log("6. Go dependency pinning");
 const goModGlob = new Glob("**/go.mod");
 const goMods: string[] = [];
 for await (const path of goModGlob.scan({ cwd: REPO_ROOT, absolute: true })) {
@@ -220,8 +172,8 @@ if (goMods.length === 0) {
 }
 console.log();
 
-// --- 9. Go builds are static (CGO_ENABLED=0) ---
-console.log("9. Go static builds");
+// --- 7. Go builds are static (CGO_ENABLED=0) ---
+console.log("7. Go static builds");
 if (existsSync(CONTAINERFILE)) {
   const content = await Bun.file(CONTAINERFILE).text();
   const goBuilds = content.split("\n").filter(l => /\bgo build\b/.test(l));
@@ -243,8 +195,8 @@ if (existsSync(CONTAINERFILE)) {
 }
 console.log();
 
-// --- 10. Docker --provenance=false ---
-console.log("10. Docker provenance disabled");
+// --- 8. Docker --provenance=false ---
+console.log("8. Docker provenance disabled");
 const makefile = resolve(REPO_ROOT, "Makefile");
 if (existsSync(makefile)) {
   const content = await Bun.file(makefile).text();
@@ -258,8 +210,8 @@ if (existsSync(makefile)) {
 }
 console.log();
 
-// --- 11. Deterministic cpio (timestamps zeroed, --reproducible) ---
-console.log("11. Deterministic initramfs");
+// --- 9. Deterministic cpio (timestamps zeroed, --reproducible) ---
+console.log("9. Deterministic initramfs");
 if (existsSync(CONTAINERFILE)) {
   const content = await Bun.file(CONTAINERFILE).text();
   const checks = {

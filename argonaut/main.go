@@ -1,25 +1,31 @@
-// Unified VSOCK↔TCP traffic proxy for Nautilus.
+// Argonaut — companion binary for Nautilus-TS enclaves.
+//
+// Handles VSOCK↔TCP bridging, config delivery, and NSM attestation.
+// Named "arGOnaut" as a nod to Go, and Nautilus-adjacent.
 //
 // Modes:
 //
-//	traffic-proxy host <tcp-port> <cid> <vsock-port>
+//	argonaut host <tcp-port> <cid> <vsock-port>
 //	    Listen on TCP, forward to VSOCK. Used on the parent EC2 instance
 //	    to bridge inbound HTTP into the enclave.
 //
-//	traffic-proxy enclave
+//	argonaut enclave
 //	    Read JSON config from stdin, then:
 //	    1. Write /etc/hosts for endpoint hostname resolution
 //	    2. Inbound:  VSOCK listen → TCP connect to localhost (HTTP to Bun)
 //	    3. Outbound: TCP listen on loopback → VSOCK connect to parent
 //	    Runs inside the Nitro Enclave where there is no network.
 //
-//	traffic-proxy config send <cid> <vsock-port>
+//	argonaut config send <cid> <vsock-port>
 //	    Read stdin and send it to VSOCK:<cid>:<port>. Used on the host
 //	    to deliver boot config to the enclave.
 //
-//	traffic-proxy config recv <vsock-port>
+//	argonaut config recv <vsock-port>
 //	    Listen on VSOCK:<port>, accept one connection, read all data,
 //	    and write it to stdout. Used inside the enclave at boot.
+//
+//	argonaut nsm
+//	    NSM proxy: stdin/stdout line protocol for attestation and RNG.
 package main
 
 import (
@@ -50,6 +56,8 @@ func main() {
 		enclaveMode()
 	case "config":
 		configMode()
+	case "nsm":
+		nsmMode()
 	default:
 		usage()
 	}
@@ -61,6 +69,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "  %s enclave  (reads JSON config from stdin)\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s config send <cid> <vsock-port>  (send stdin to VSOCK)\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "  %s config recv <vsock-port>        (receive from VSOCK to stdout)\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "  %s nsm                             (NSM proxy: stdin/stdout line protocol)\n", os.Args[0])
 	os.Exit(1)
 }
 

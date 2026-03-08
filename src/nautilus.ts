@@ -73,26 +73,26 @@ export interface BootResult {
   ctx: NautilusContext;
 }
 
-/** Spawn the traffic proxy as a child process. */
-function startTrafficProxy(config: BootConfig, httpPort: number): void {
+/** Spawn the argonaut companion as a child process. */
+function startArgonaut(config: BootConfig, httpPort: number): void {
   const proxyConfig = JSON.stringify({
     httpVsockPort: httpPort,
     httpTcpPort: httpPort,
     endpoints: config.endpoints,
   });
 
-  const proc = Bun.spawn(["/traffic-proxy", "enclave"], {
+  const proc = Bun.spawn(["/argonaut", "enclave"], {
     stdin: new Blob([proxyConfig]),
     stdout: "inherit",
     stderr: "inherit",
   });
 
   proc.exited.then((code) => {
-    console.error(`[nautilus] traffic-proxy exited with code ${code}`);
+    console.error(`[nautilus] argonaut companion exited with code ${code}`);
     process.exit(1);
   });
 
-  console.log(`[nautilus] traffic-proxy started (pid ${proc.pid})`);
+  console.log(`[nautilus] argonaut companion started (pid ${proc.pid})`);
 }
 
 /**
@@ -101,7 +101,7 @@ function startTrafficProxy(config: BootConfig, httpPort: number): void {
  * In enclave mode:
  *   1. Set up loopback networking
  *   2. Receive config from host via VSOCK:7777
- *   3. Spawn traffic proxy (handles /etc/hosts, TCP↔VSOCK bridges)
+ *   3. Spawn argonaut (handles /etc/hosts, TCP↔VSOCK bridges)
  *
  * In dev mode:
  *   1. Read config from file or use defaults
@@ -119,8 +119,8 @@ export async function boot(options: BootOptions = {}): Promise<BootResult> {
     setupLoopback();
     config = await receiveBootConfig();
 
-    // Spawn traffic proxy — handles /etc/hosts, inbound + outbound bridges
-    startTrafficProxy(config, port);
+    // Spawn argonaut — handles /etc/hosts, inbound + outbound bridges
+    startArgonaut(config, port);
   } else {
     console.log("[nautilus] booting in dev mode");
     config = await devBootConfig(options.devConfigPath);

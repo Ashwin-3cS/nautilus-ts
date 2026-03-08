@@ -1,7 +1,7 @@
 /**
- * NSM (Nitro Secure Module) access via a persistent Rust proxy process.
+ * NSM (Nitro Secure Module) access via the argonaut companion binary.
  *
- * The proxy owns all /dev/nsm interaction and speaks a tiny line-based
+ * The argonaut nsm subprocess owns all /dev/nsm interaction and speaks a tiny line-based
  * protocol over stdin/stdout:
  *   - "<id> ATT <hex-public-key>"
  *   - "<id> RND"
@@ -35,7 +35,7 @@ export class NsmProxyClient {
     this.proc.exited.then((code) => {
       this.exited = true;
       proxyClient = null;
-      const error = new Error(`nsm-proxy exited with code ${code}`);
+      const error = new Error(`argonaut nsm exited with code ${code}`);
       for (const pending of this.pending.values()) {
         pending.reject(error);
       }
@@ -64,7 +64,7 @@ export class NsmProxyClient {
     payload?: Uint8Array,
   ): Promise<string> {
     if (this.exited) {
-      throw new Error("nsm-proxy is not running");
+      throw new Error("argonaut nsm is not running");
     }
 
     const id = this.nextId++;
@@ -131,38 +131,17 @@ export class NsmProxyClient {
       return;
     }
 
-    pending.reject(new Error(`nsm-proxy error: ${payload}`));
+    pending.reject(new Error(`argonaut nsm error: ${payload}`));
   }
 }
 
 let proxyClient: NsmProxyClient | null = null;
 
-function findProxyPath(): string | null {
-  const candidates = [
-    process.env.NSM_PROXY_PATH,
-    "/nsm-proxy",
-    "./target/x86_64-unknown-linux-musl/release/nsm-proxy",
-    "./target/release/nsm-proxy",
-  ].filter(Boolean) as string[];
-
-  for (const path of candidates) {
-    if (existsSync(path)) {
-      return path;
-    }
-  }
-
-  return null;
-}
+const argonautPath = "/argonaut";
 
 function getClient(): NsmProxyClient {
   if (proxyClient) return proxyClient;
-
-  const path = findProxyPath();
-  if (!path) {
-    throw new Error("nsm-proxy binary not found");
-  }
-
-  proxyClient = new NsmProxyClient(path);
+  proxyClient = new NsmProxyClient(argonautPath, ["nsm"]);
   return proxyClient;
 }
 

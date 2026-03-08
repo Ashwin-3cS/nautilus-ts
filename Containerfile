@@ -2,24 +2,17 @@
 #
 # Architecture:
 #   - Compiled Bun standalone binary (includes all TS/JS deps)
-#   - Go traffic-proxy binary (TCP↔VSOCK bridging with proper half-close)
-#   - Rust nsm-proxy binary for attestation and hardware RNG (/dev/nsm)
+#   - Go argonaut binary (TCP↔VSOCK bridging, NSM attestation, config delivery)
 #   - No Python, no shell scripts as PID 1
 #   - nit init runs the Bun binary directly
 
 # --- StageX base images (reproducible builds) ---
-FROM stagex/core-binutils@sha256:f2d3bf6104db0d5ac39ca155c0241bfea2516a6829e3b4fd657cf9ba5b625478 AS core-binutils
 FROM stagex/core-ca-certificates@sha256:d135f1189e9b232eb7316626bf7858534c5540b2fc53dced80a4c9a95f26493e AS core-ca-certificates
 FROM stagex/core-gcc@sha256:964ffd3793c5a38ca581e9faefd19918c259f1611c4cbf5dc8be612e3a8b72f5 AS core-gcc
 FROM stagex/core-zlib@sha256:06f5168e20d85d1eb1d19836cdf96addc069769b40f8f0f4a7a70b2f49fc18f8 AS core-zlib
-FROM stagex/core-llvm@sha256:583ecda677f51b69857f8027dfc58f4a931d1adc4d16214870a373505210d973 AS core-llvm
 FROM stagex/core-openssl@sha256:d6487f0cb15f4ee02b420c717cb9abd85d73043c0bb3a2c6ce07688b23c1df07 AS core-openssl
-FROM stagex/core-rust@sha256:2ea0be043b92321b5d1c2784911a770ccca28c09c3cf6a0f81fc0cd05a2abb08 AS core-rust
 FROM stagex/core-musl@sha256:d9af23284cca2e1002cd53159ada469dfe6d6791814e72d6163c7de18d4ae701 AS core-musl
 FROM stagex/core-libunwind@sha256:eb66122d8fc543f5e2f335bb1616f8c3a471604383e2c0a9df4a8e278505d3bc AS core-libunwind
-FROM stagex/core-pkgconf@sha256:52624a89bb8cc684bc0391fcb7770ded2bbcb281e84bdb68a31fce127439fd7b AS core-pkgconf
-FROM stagex/core-libffi@sha256:64d087343541401271cf9fec6b7bd788040c72a16918748ae36c171e53e94002 AS core-libffi
-FROM stagex/core-libzstd@sha256:5382c221194b6d0690eb65ccca01c720a6bd39f92e610dbc0e99ba43f38f3094 AS core-libzstd
 FROM stagex/core-busybox@sha256:637b1e0d9866807fac94c22d6dc4b2e1f45c8a5ca1113c88172e0324a30c7283 AS core-busybox
 FROM stagex/user-eif_build@sha256:935032172a23772ea1a35c6334aa98aa7b0c46f9e34a040347c7b2a73496ef8a AS user-eif_build
 FROM stagex/user-linux-nitro@sha256:aa1006d91a7265b33b86160031daad2fdf54ec2663ed5ccbd312567cc9beff2c AS user-linux-nitro
@@ -39,34 +32,11 @@ COPY src/ /app/src/
 COPY package.json tsconfig.json /app/
 RUN bun build --compile --minify --sourcemap --target=bun-linux-x64-musl ./src/server.ts --outfile nautilus-server
 
-# --- Build Rust NSM proxy ---
-FROM scratch AS rust-base
-COPY --from=core-busybox . /
-COPY --from=core-musl . /
-COPY --from=core-libunwind . /
-COPY --from=core-openssl . /
-COPY --from=core-zlib . /
-COPY --from=core-gcc . /
-COPY --from=core-llvm . /
-COPY --from=core-libffi . /
-COPY --from=core-libzstd . /
-COPY --from=core-rust . /
-COPY --from=core-pkgconf . /
-COPY --from=core-binutils . /
-COPY --from=core-ca-certificates . /
-
-FROM rust-base AS rust-build
-COPY tools/nsm-proxy /build/nsm-proxy
-ENV OPENSSL_STATIC=true
-ENV TARGET=x86_64-unknown-linux-musl
-WORKDIR /build/nsm-proxy
-RUN cargo build --release --locked --target "$TARGET"
-
-# --- Build Go traffic proxy (VSOCK↔TCP bridge) ---
+# --- Build Go argonaut binary (VSOCK↔TCP bridge + NSM) ---
 FROM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS go-build
 WORKDIR /build
-COPY tools/traffic-proxy/ .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o traffic-proxy .
+COPY argonaut/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o argonaut .
 
 # --- Assemble initramfs ---
 FROM scratch AS base
@@ -104,19 +74,14 @@ RUN mkdir -p initramfs/usr/lib && \
     cp /usr/lib/libgcc_s.so.1 initramfs/usr/lib/ && \
     cp /usr/lib/libunwind.so.8 initramfs/usr/lib/
 
-# Rust NSM proxy
-COPY --from=rust-build /build/nsm-proxy/target/x86_64-unknown-linux-musl/release/nsm-proxy initramfs/nsm-proxy
-RUN chmod +x initramfs/nsm-proxy
-
-# Go traffic proxy (VSOCK↔TCP bridge)
-COPY --from=go-build /build/traffic-proxy initramfs/traffic-proxy
-RUN chmod +x initramfs/traffic-proxy
+# Go argonaut binary (VSOCK↔TCP bridge + NSM attestation)
+COPY --from=go-build /build/argonaut initramfs/argonaut
+RUN chmod +x initramfs/argonaut
 
 # Environment
 COPY <<-EOF initramfs/etc/environment
 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 SSL_CERT_DIR=/etc/ssl/certs
-NSM_PROXY_PATH=/nsm-proxy
 LD_LIBRARY_PATH=/usr/lib:/lib
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/
 EOF

@@ -1,6 +1,6 @@
 /**
- * Mock nsm-proxy that implements the same line-based protocol
- * as the real Rust binary, for testing NsmProxyClient.
+ * Mock NSM proxy that implements the same line-based protocol
+ * as argonaut nsm, for testing NsmProxyClient.
  *
  * Protocol:
  *   "<id> ATT <hex-public-key>" → "<id> OK <hex-public-key>" (echoes back)

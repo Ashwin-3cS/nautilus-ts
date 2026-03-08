@@ -10,21 +10,21 @@ Write your enclave business logic in TypeScript using Mysten's SDKs (`@mysten/su
 ┌──────────────────── Nitro Enclave ────────────────────┐
 │                                                        │
 │  ┌──────────────┐     ┌──────────────────────────┐    │
-│  │ traffic-proxy│     │ nautilus-server           │    │
+│  │ argonaut     │     │ nautilus-server           │    │
 │  │ (Go)         │     │ (Bun compiled binary)     │    │
 │  │              │     │  Your TS business logic   │    │
 │  │ VSOCK:3000 ──┼─TCP─┤► Hono app on :3000        │    │
 │  │              │     │  @mysten/sui, @mysten/seal│    │
 │  │ TCP:443 ◄────┼─────┤► fetch("https://...")     │    │
 │  │  ↕ VSOCK     │     │                           │    │
-│  └──────────────┘     │  NSM via persistent       │    │
-│                       │  Rust nsm-proxy process   │    │
-│                       └──────────────────────────┘    │
+│  │              │     │  NSM via persistent       │    │
+│  │ /dev/nsm ────┼─────┤► argonaut nsm subprocess  │    │
+│  └──────────────┘     └──────────────────────────┘    │
 │                                                        │
 └───────────────────── VSOCK boundary ──────────────────┘
          ↕                              ↕
 ┌──────── EC2 Host ─────────────────────────────────────┐
-│  traffic-proxy host TCP:8080 ↔ VSOCK:3000 (inbound)  │
+│  argonaut host TCP:8080 ↔ VSOCK:3000 (inbound)       │
 │  vsock-proxy VSOCK:8101 ↔ seal.mirai.cloud:443       │
 │  vsock-proxy VSOCK:8103 ↔ walrus.space:443           │
 │  vsock-proxy VSOCK:8104 ↔ fullnode.sui.io:443        │
@@ -35,13 +35,12 @@ Write your enclave business logic in TypeScript using Mysten's SDKs (`@mysten/su
 
 **Bun compiled binary** (`nautilus-server`): Your TypeScript application compiled into a single ~55MB standalone binary via `bun build --compile`. Contains the Bun runtime, all npm dependencies, and your business logic. Runs as PID 1 target inside the enclave.
 
-**Go traffic proxy** (`tools/traffic-proxy`): A small static binary that handles all TCP↔VSOCK bridging. In enclave mode it is spawned as a child process by the Bun binary at boot; in host mode the same binary bridges inbound TCP into enclave VSOCK. It manages:
+**Go companion binary** (`argonaut`): A single static binary that handles all native enclave concerns — TCP↔VSOCK bridging, NSM attestation via `/dev/nsm` ioctl, and boot config delivery. Named "arGOnaut" as a nod to Go and its Nautilus-adjacent role. In enclave mode it is spawned as a child process by the Bun binary at boot; in host mode the same binary bridges inbound TCP into enclave VSOCK. It manages:
 
 - **Inbound bridge**: VSOCK:3000 → TCP:127.0.0.1:3000 (HTTP requests from the host reach your Bun server)
 - **Outbound proxies**: TCP:127.0.0.x:443 → VSOCK:parent:port (your `fetch()` calls reach external services)
 - **/etc/hosts**: Maps endpoint hostnames to loopback addresses so `fetch("https://fullnode.testnet.sui.io")` resolves correctly
-
-**Rust NSM proxy** (`nsm-proxy`): A tiny companion process that owns `/dev/nsm` access and exposes attestation and hardware RNG over a line-based stdin/stdout protocol. TypeScript keeps one persistent proxy process for the enclave lifetime, avoiding raw native pointer ownership in the Bun runtime.
+- **NSM proxy**: Persistent subprocess (`argonaut nsm`) for attestation documents and hardware RNG via `/dev/nsm` ioctl
 
 ## Why TypeScript Instead of Pure Rust?
 
@@ -49,10 +48,7 @@ The [official Mysten Nautilus implementation](https://github.com/MystenLabs/naut
 
 **SDK access**: Mysten's TypeScript SDKs (`@mysten/sui`, `@mysten/seal`, `@mysten/bcs`) are designed for building user-facing applications quickly. The Rust SDKs are actively maintained and complete, but implemented as lower-level building blocks — Seal decryption flows, PTB construction helpers, and BCS encoding are more ergonomic in TypeScript. With Bun, you import the same libraries you use in your frontend/backend.
 
-**Selective native code**: Native code is used only where it's genuinely better:
-
-- **NSM attestation** requires ioctl on `/dev/nsm` — a tiny Rust proxy process keeps that boundary outside the Bun runtime
-- **Traffic proxying** requires socket bridging across TCP and VSOCK — a small Go binary handles both host and enclave proxying paths
+**Selective native code**: Native code is used only where it's genuinely better — a single Go binary (`argonaut`) handles all the VSOCK bridging, NSM attestation, and config delivery. Everything else is TypeScript.
 
 ## Why a Custom Traffic Proxy?
 
@@ -64,7 +60,7 @@ AWS's Nitro Enclave documentation and Mysten's official implementation both use 
 
 We replaced it with a small native binary for several reasons:
 
-**No Python in the enclave**: Adding Python to a minimal enclave image adds ~40MB, increases the attack surface, and makes reproducible builds harder. Our traffic proxy is a single static musl binary (~2MB).
+**No Python in the enclave**: Adding Python to a minimal enclave image adds ~40MB, increases the attack surface, and makes reproducible builds harder. Our argonaut binary is a single static musl binary (~3MB).
 
 **Proper stream handling**: Python threads with blocking `recv()` work but are not optimal. Our proxy uses full-duplex stream copying with proper half-close handling so larger responses and sequential requests do not wedge the bridge.
 
@@ -76,11 +72,11 @@ We replaced it with a small native binary for several reasons:
 
 Nitro Enclaves have no network interface. The only communication channel is [VSOCK](https://man7.org/linux/man-pages/man7/vsock.7.html) — a socket address family (`AF_VSOCK = 40`) for hypervisor-guest communication.
 
-**Boot config** (one-shot): At startup, the Bun binary spawns `traffic-proxy config recv 7777`, which listens on VSOCK port 7777 for a one-shot JSON configuration blob from the host. No FFI or raw socket code in TypeScript — the Go binary handles the VSOCK layer.
+**Boot config** (one-shot): At startup, the Bun binary spawns `argonaut config recv 7777`, which listens on VSOCK port 7777 for a one-shot JSON configuration blob from the host. No FFI or raw socket code in TypeScript — the Go binary handles the VSOCK layer.
 
-**Traffic proxying** (persistent): All ongoing VSOCK I/O is handled by the Go traffic proxy. The Bun process only deals with standard TCP sockets — `Bun.serve()` listens on `127.0.0.1:3000`, and `fetch()` calls resolve to loopback addresses that the proxy bridges to VSOCK.
+**Traffic proxying** (persistent): All ongoing VSOCK I/O is handled by the argonaut binary. The Bun process only deals with standard TCP sockets — `Bun.serve()` listens on `127.0.0.1:3000`, and `fetch()` calls resolve to loopback addresses that the proxy bridges to VSOCK.
 
-**NSM attestation**: The `/dev/nsm` device requires an ioctl interface. A minimal Rust proxy binary (`nsm-proxy`) wraps the [aws-nitro-enclaves-nsm-api](https://github.com/aws/aws-nitro-enclaves-nsm-api) crate and stays alive for the enclave lifetime. TypeScript sends requests over stdin/stdout and receives attestation documents or hardware RNG bytes back as plain hex payloads.
+**NSM attestation**: The `/dev/nsm` device requires an ioctl interface. The argonaut binary implements this directly in Go using `unix.Syscall(SYS_IOCTL, ...)` with CBOR encoding that matches the AWS NSM API. A persistent subprocess (`argonaut nsm`) stays alive for the enclave lifetime. TypeScript sends requests over stdin/stdout and receives attestation documents or hardware RNG bytes back as plain hex payloads.
 
 ## Quick Start
 
@@ -106,18 +102,16 @@ src/
   server.ts          # Your application entry point
   nautilus.ts        # Framework: boot(), Hono app, NautilusContext
   core/
-    config.ts        # Boot config via traffic-proxy VSOCK:7777
+    config.ts        # Boot config via argonaut VSOCK:7777
     network.ts       # Loopback interface setup
     crypto.ts        # Ed25519 signing, hashing (@noble libraries)
   nsm/
-    index.ts         # Persistent client for the Rust nsm-proxy process
-tools/
-  nsm-proxy/         # Rust proxy for /dev/nsm attestation and RNG
-  traffic-proxy/     # Go binary for host/enclave TCP↔VSOCK bridging
+    index.ts         # Persistent client for the argonaut nsm subprocess
+argonaut/            # Go binary for VSOCK bridging, NSM attestation, config
 scripts/
   deploy.sh          # EC2 deployment script
   systemd/           # systemd units for host services
-Containerfile        # Multi-stage EIF build (StageX + Bun + Rust + Go)
+Containerfile        # Multi-stage EIF build (StageX + Bun + Go)
 ```
 
 ## Configuration
@@ -179,7 +173,7 @@ The `ctx` object provides:
 
 ### How does the enclave access the NSM for attestation?
 
-The NSM (Nitro Secure Module) is accessed via ioctl on `/dev/nsm`. Since JavaScript can't do ioctl directly, we ship a tiny Rust proxy process (`nsm-proxy`) that wraps the `aws-nitro-enclaves-nsm-api` crate. The Bun process keeps that proxy alive and sends it attestation/RNG requests over stdin/stdout, so no raw native pointers cross into the JS runtime.
+The NSM (Nitro Secure Module) is accessed via ioctl on `/dev/nsm`. Since JavaScript can't do ioctl directly, the argonaut binary implements the NSM interface in Go using `unix.Syscall(SYS_IOCTL, ...)` with CBOR encoding that matches the AWS NSM API. The Bun process keeps the `argonaut nsm` subprocess alive and sends it attestation/RNG requests over stdin/stdout, so no raw native pointers cross into the JS runtime.
 
 ### Does the TypeScript code know it's inside an enclave?
 
@@ -203,7 +197,7 @@ The keypair is generated at boot by mixing two independent entropy sources: `cry
 
 ### Are builds reproducible? Will PCR values be the same?
 
-Yes, given identical source code and lockfiles. All Docker base images are pinned by SHA256 digest, Cargo.lock and bun.lock are committed, `cargo build --locked` and `bun install --frozen-lockfile` are enforced, file timestamps are zeroed, and cpio archives are built with deterministic ordering. Run `bun scripts/check-reproducibility.ts` to verify that nothing has drifted. The same source should produce the same PCR0/PCR1/PCR2 measurements on any machine.
+Yes, given identical source code and lockfiles. All Docker base images are pinned by SHA256 digest, bun.lock is committed, `bun install --frozen-lockfile` is enforced, file timestamps are zeroed, and cpio archives are built with deterministic ordering. Run `bun scripts/check-reproducibility.ts` to verify that nothing has drifted. The same source should produce the same PCR0/PCR1/PCR2 measurements on any machine.
 
 ### What are the PCR values and how do I verify them?
 
@@ -215,15 +209,15 @@ Yes. Add entries to the `endpoints` array in your boot config and set up corresp
 
 ### Why Bun instead of Node.js?
 
-Bun compiles TypeScript into a single standalone binary via `bun build --compile`. This binary includes the runtime, all npm dependencies, and your code — no `node_modules` directory, no package manager, no interpreter needed inside the enclave. There is no `bun:ffi` usage — all native boundaries (VSOCK, NSM) are handled by companion binaries (`traffic-proxy`, `nsm-proxy`) that the Bun process spawns and communicates with over stdin/stdout or TCP.
+Bun compiles TypeScript into a single standalone binary via `bun build --compile`. This binary includes the runtime, all npm dependencies, and your code — no `node_modules` directory, no package manager, no interpreter needed inside the enclave. All native boundaries (VSOCK, NSM) are handled by the argonaut companion binary that the Bun process spawns and communicates with over stdin/stdout or TCP.
 
 ### Why not just use the official Mysten Nautilus (Rust)?
 
-You can and should if Rust is your preference. This template exists for teams that want to write their enclave business logic in TypeScript using Mysten's TypeScript SDKs. The trade-off is a slightly larger image (Bun runtime + Rust components vs pure Rust) in exchange for faster iteration and access to the TypeScript ecosystem.
+You can and should if Rust is your preference. This template exists for teams that want to write their enclave business logic in TypeScript using Mysten's TypeScript SDKs. The trade-off is a slightly larger image (Bun runtime + Go companion vs pure Rust) in exchange for faster iteration and access to the TypeScript ecosystem.
 
 ### What happens if the traffic proxy crashes?
 
-The Bun process monitors the traffic proxy as a child process. If it exits, Bun logs the error and calls `process.exit(1)`, which terminates the enclave. This is intentional — silently losing network connectivity is worse than a clean restart.
+The Bun process monitors argonaut as a child process. If it exits, Bun logs the error and calls `process.exit(1)`, which terminates the enclave. This is intentional — silently losing network connectivity is worse than a clean restart.
 
 ### Can I use this without Sui?
 
@@ -237,11 +231,11 @@ Include a `secrets` object in the boot config sent via VSOCK:7777. These are ava
 
 [Mysten's official Nautilus](https://github.com/MystenLabs/nautilus/blob/main/expose_enclave.sh) and most Nitro Enclave tutorials use `socat TCP-LISTEN:port,fork VSOCK-CONNECT:cid:port` on the parent EC2 to bridge inbound HTTP traffic. socat's `fork` mode creates a new process and VSOCK connection for every incoming TCP connection, and under rapid sequential connections the VSOCK socket can race, causing `Transport endpoint is not connected` errors.
 
-We ship a dedicated host mode in the `traffic-proxy` binary (`tools/traffic-proxy/`) that replaces socat for inbound traffic. The Linux VSOCK subsystem itself can transiently timeout under rapid sequential connections regardless of the client — socat surfaces these as client-visible errors, while `traffic-proxy host` absorbs them with a transparent connect retry loop. Usage: `traffic-proxy host <listen-port> <enclave-cid> <vsock-port>`.
+We ship a dedicated host mode in argonaut (`argonaut host`) that replaces socat for inbound traffic. The Linux VSOCK subsystem itself can transiently timeout under rapid sequential connections regardless of the client — socat surfaces these as client-visible errors, while `argonaut host` absorbs them with a transparent connect retry loop. Usage: `argonaut host <listen-port> <enclave-cid> <vsock-port>`.
 
 ### Is the native traffic proxy necessary? Can I use Python's traffic_forwarder.py?
 
-You can, but we don't recommend it. The Python forwarder adds ~40MB to the image, uses blocking threads, and requires the Python runtime. Our native traffic proxy is a small static binary with proper bidirectional stream handling. It also means one fewer language runtime in your attack surface.
+You can, but we don't recommend it. The Python forwarder adds ~40MB to the image, uses blocking threads, and requires the Python runtime. The argonaut binary is a small static binary with proper bidirectional stream handling. It also means one fewer language runtime in your attack surface.
 
 ### How does this compare to Mysten's Nautilus for reproducibility?
 
@@ -257,12 +251,11 @@ Yes. `bun run dev` starts the server in dev mode — no enclave, no VSOCK, no NS
 
 ## Testing
 
-135 tests across TypeScript, Go, and Rust cover every security boundary and functional path. Run all tests with:
+151 tests across TypeScript and Go cover every security boundary and functional path. Run all tests with:
 
 ```bash
-bun test                                                    # TypeScript (112 tests)
-go test -v ./... -C tools/traffic-proxy                     # Go (9 tests)
-cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests)
+bun test                    # TypeScript (112 tests)
+go test -v ./... -C argonaut  # Go (39 tests: 9 traffic + 30 NSM)
 ```
 
 ### TypeScript — Config Validation (`tests/config.test.ts`)
@@ -283,7 +276,7 @@ cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests
 - **Secrets type checking** — Rejects non-object secrets, array secrets, and non-string secret values.
 - **logLevel type checking** — Rejects non-string logLevel values.
 - **App type checking** — Rejects non-object and array app values.
-- **Secrets isolation** — Verifies that config secrets are NOT injected into `process.env` (prevents host from overwriting internal env vars like `NSM_PROXY_PATH`).
+- **Secrets isolation** — Verifies that config secrets are NOT injected into `process.env` (prevents host from overwriting internal env vars).
 
 ### TypeScript — Cryptography (`tests/crypto.test.ts`)
 
@@ -325,7 +318,7 @@ cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests
 - **ERR response handling** — Proxy ERR responses correctly reject the corresponding promise with the error message.
 - **Large attestation documents** — Handles 4KB attestation documents (realistic production size) without truncation.
 
-### Go — Traffic Proxy (`tools/traffic-proxy/main_test.go`)
+### Go — Traffic Proxy (`argonaut/main_test.go`)
 
 - **Config JSON parsing** — Parses valid JSON with endpoints, httpVsockPort, and httpTcpPort.
 - **Empty endpoints** — Handles configs with zero endpoints.
@@ -337,19 +330,18 @@ cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests
 - **Bidirectional copy** — Data flows correctly in both directions through the bridge with proper half-close handling.
 - **Max endpoint limit** — Verifies the IP address space boundary at 191 endpoints.
 
-### Rust — NSM Proxy (`tools/nsm-proxy/src/main.rs`)
+### Go — NSM (`argonaut/nsm_test.go`)
 
 - **Hex codec** — Rejects odd-length input, rejects invalid characters, round-trips encoding/decoding.
-- **ATT request** — Processes attestation requests and returns hex-encoded documents.
-- **RND request** — Processes random requests and returns hex-encoded bytes.
-- **Unknown method** — Returns ERR for unrecognized methods.
-- **Invalid hex payload** — Returns ERR for non-hex attestation payloads.
-- **Empty and whitespace lines** — Returns appropriate ERR responses.
-- **ID-only requests** — Returns ERR when no method is specified.
-- **Missing ATT payload** — Returns ERR when ATT is sent without a public key.
-- **Odd-length hex** — Returns ERR for odd-length hex in ATT payload.
-- **Wrong key length** — Validates that public keys must be exactly 32 bytes; rejects 16-byte and 64-byte keys (using StrictFakeBackend that mirrors NitroBackend validation).
-- **Correct key length** — Accepts 32-byte public keys and returns the attestation document.
+- **Line protocol** (13 tests) — ATT/RND requests, unknown methods, invalid hex, empty/whitespace lines, missing payloads, odd-length hex, wrong/correct key lengths with StrictFakeBackend.
+- **CBOR proxy layer** — Attestation request round-trips, GetRandom encodes as unit variant string, response decoding for Attestation, GetRandom, and Error variants.
+- **AttestationDoc round-trip** (ported from [aws-nitro-enclaves-nsm-api](https://github.com/aws/aws-nitro-enclaves-nsm-api/blob/main/src/api/mod.rs)) — Constructs an AttestationDoc with PCRs, certificate, and public key, serializes to CBOR, deserializes, re-serializes, and verifies structural + binary equality.
+- **All ErrorCode variants** — Decodes all 9 upstream error codes (Success, InvalidArgument, InvalidIndex, InvalidResponse, ReadOnlyIndex, InvalidOperation, BufferTooSmall, InputTooLarge, InternalError).
+- **Attestation request combinations** (ported from nsm-check.rs patterns) — All 5 optional field combinations: none, user_data only, user_data+nonce, all three, public_key only.
+- **Unhandled response variants** — DescribePCR and DescribeNSM responses return errors (not implemented in proxy, expected behavior).
+- **Digest enum serialization** — SHA256, SHA384, SHA512 round-trip through CBOR as plain strings.
+- **GetRandom uniqueness** — 16 distinct random payloads decode without confusion.
+- **PCR map round-trip** — BTreeMap-style PCR data (6 entries including empty PCR3) round-trips through CBOR with correct key ordering.
 
 ### End-to-End — Enclave Smoke Test (`scripts/enclave-smoke-test.sh`)
 
@@ -366,10 +358,9 @@ Runs on a real Nitro Enclave (EC2 with `c5.xlarge` or larger):
 On every push to `main` and every pull request:
 
 1. **TypeScript** — `bun test` + reproducibility check
-2. **Rust** — `cargo test --locked`
-3. **Go** — `go test -v ./...`
-4. **EIF build** — `make` (full Docker build of the enclave image)
-5. **Smoke test** (main only) — Launches a spot EC2 instance, deploys the EIF, and runs the full enclave smoke test
+2. **Go** — `go test -v ./...`
+3. **EIF build** — `make` (full Docker build of the enclave image)
+4. **Smoke test** (main only) — Launches a spot EC2 instance, deploys the EIF, and runs the full enclave smoke test
 
 ## Disclaimer
 

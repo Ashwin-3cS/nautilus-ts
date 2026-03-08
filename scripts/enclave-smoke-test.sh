@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Enclave smoke test — boots a Nitro Enclave and verifies core behavior.
 #
-# Prerequisites: nitro-cli, traffic-proxy, jq, curl
-# Usage: ./scripts/enclave-smoke-test.sh out/nitro.eif <path-to-traffic-proxy>
+# Prerequisites: nitro-cli, argonaut, jq, curl
+# Usage: ./scripts/enclave-smoke-test.sh out/nitro.eif <path-to-argonaut>
 set -euo pipefail
 
-EIF_PATH="${1:?Usage: $0 <path-to-eif> <traffic-proxy-path>}"
-TRAFFIC_PROXY="${2:?Usage: $0 <path-to-eif> <traffic-proxy-path>}"
+EIF_PATH="${1:?Usage: $0 <path-to-eif> <argonaut-path>}"
+ARGONAUT="${2:?Usage: $0 <path-to-eif> <argonaut-path>}"
 HTTP_PORT=8080
 VSOCK_HTTP_PORT=3000
 VSOCK_CONFIG_PORT=7777
@@ -40,14 +40,14 @@ sleep 2
 
 # --- Send boot config via VSOCK:7777 ---
 echo "[smoke] sending boot config via VSOCK:$VSOCK_CONFIG_PORT"
-echo '{"endpoints":[]}' | "$TRAFFIC_PROXY" config send "$ENCLAVE_CID" "$VSOCK_CONFIG_PORT"
+echo '{"endpoints":[]}' | "$ARGONAUT" config send "$ENCLAVE_CID" "$VSOCK_CONFIG_PORT"
 echo "[smoke] boot config sent"
 
 sleep 2
 
 # --- Set up inbound HTTP bridge ---
 echo "[smoke] bridging TCP:$HTTP_PORT → VSOCK:$ENCLAVE_CID:$VSOCK_HTTP_PORT"
-"$TRAFFIC_PROXY" host "$HTTP_PORT" "$ENCLAVE_CID" "$VSOCK_HTTP_PORT" &
+"$ARGONAUT" host "$HTTP_PORT" "$ENCLAVE_CID" "$VSOCK_HTTP_PORT" &
 BRIDGE_PID=$!
 sleep 1
 

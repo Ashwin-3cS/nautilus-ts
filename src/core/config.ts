@@ -81,20 +81,20 @@ export function validateBootConfig(raw: unknown): BootConfig {
 
 /**
  * Receive boot config from the host via VSOCK port 7777.
- * Spawns `traffic-proxy config recv 7777` which listens on VSOCK,
+ * Spawns `argonaut config recv 7777` which listens on VSOCK,
  * accepts one connection, and writes the received data to stdout.
  */
 export async function receiveBootConfig(): Promise<BootConfig> {
   console.log("[config] waiting for boot config on VSOCK:7777...");
 
-  const proc = Bun.spawn(["/traffic-proxy", "config", "recv", "7777"], {
+  const proc = Bun.spawn(["/argonaut", "config", "recv", "7777"], {
     stdout: "pipe",
     stderr: "inherit",
   });
 
   const code = await proc.exited;
   if (code !== 0) {
-    throw new Error(`traffic-proxy config recv exited with code ${code}`);
+    throw new Error(`nautilus config recv exited with code ${code}`);
   }
 
   const json = await new Response(proc.stdout).text();
@@ -104,8 +104,7 @@ export async function receiveBootConfig(): Promise<BootConfig> {
 
   // Secrets are available to handlers via ctx.config.secrets —
   // we intentionally do NOT inject them into process.env to prevent
-  // the host from overwriting internal env vars (e.g. NSM_PROXY_PATH,
-  // which is read when resolving the NSM proxy binary).
+  // the host from overwriting internal env vars.
   if (config.secrets) {
     console.log(`[config] ${Object.keys(config.secrets).length} secrets available via ctx.config.secrets`);
   }

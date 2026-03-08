@@ -12,7 +12,7 @@
 # Optional:
 #   EC2_INSTANCE_TYPE    — Instance type (default: c5.xlarge)
 #
-# Expects out/nitro.eif and out/traffic-proxy to exist.
+# Expects out/nitro.eif and out/argonaut to exist.
 set -euo pipefail
 
 INSTANCE_TYPE="${EC2_INSTANCE_TYPE:-c5.xlarge}"
@@ -27,7 +27,7 @@ for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION \
   fi
 done
 
-for file in out/nitro.eif out/traffic-proxy; do
+for file in out/nitro.eif out/argonaut; do
   [[ -f "$file" ]] || { echo "[ci] ERROR: $file not found"; exit 1; }
 done
 
@@ -121,11 +121,11 @@ for i in $(seq 1 30); do
 done
 
 # Copy files to instance
-echo "[ci] copying EIF and traffic-proxy to instance"
-$SCP out/nitro.eif out/traffic-proxy scripts/enclave-smoke-test.sh "ec2-user@$PUBLIC_IP":~/
+echo "[ci] copying EIF and argonaut to instance"
+$SCP out/nitro.eif out/argonaut scripts/enclave-smoke-test.sh "ec2-user@$PUBLIC_IP":~/
 
 # Run smoke test
 echo "[ci] running smoke test"
-$SSH "ec2-user@$PUBLIC_IP" "chmod +x ~/traffic-proxy && sudo bash ~/enclave-smoke-test.sh ~/nitro.eif ~/traffic-proxy"
+$SSH "ec2-user@$PUBLIC_IP" "chmod +x ~/argonaut && sudo bash ~/enclave-smoke-test.sh ~/nitro.eif ~/argonaut"
 
 echo "[ci] smoke test passed"

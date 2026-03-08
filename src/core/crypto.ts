@@ -1,8 +1,8 @@
 /**
  * Cryptographic utilities for Nautilus enclaves.
  *
- * Uses @noble/ed25519 and @noble/hashes — no Rust FFI needed for signing.
- * Only NSM attestation requires Rust (see nsm/ module).
+ * Uses @noble/ed25519 and @noble/hashes — pure TypeScript, no native code.
+ * NSM attestation is handled by the argonaut companion binary (see nsm/ module).
  */
 
 import * as ed from "@noble/ed25519";
