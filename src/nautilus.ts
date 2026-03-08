@@ -1,35 +1,22 @@
 /**
  * Nautilus — TypeScript enclave framework.
  *
- * Two usage patterns:
- *
- * **1. Standalone boot (bring your own framework):**
- *
  * ```ts
  * import { boot } from "./nautilus.ts";
- * import { Hono } from "hono";
  *
- * const ctx = await boot({ port: 3000 });
- * const app = new Hono();
+ * const { app, ctx } = await boot({ port: 3000 });
  *
- * app.get("/health", (c) => c.json({ pk: ctx.publicKey }));
+ * app.post("/my_endpoint", async (c) => {
+ *   const body = await c.req.json();
+ *   const sig = ctx.sign(ctx.blake2b256(data));
+ *   return c.json({ signature: ctx.toHex(sig) });
+ * });
  *
  * export default { port: 3000, hostname: "127.0.0.1", fetch: app.fetch };
  * ```
- *
- * **2. Built-in server (batteries included):**
- *
- * ```ts
- * import { Nautilus } from "./nautilus.ts";
- *
- * const app = new Nautilus();
- * app.post("/my_endpoint", async (req, ctx) => {
- *   return Response.json({ received: await req.json() });
- * });
- * app.start();
- * ```
  */
 
+import { Hono } from "hono";
 import {
   type BootConfig,
   receiveBootConfig,
@@ -79,6 +66,13 @@ export interface BootOptions {
   _testAsEnclave?: boolean;
 }
 
+export interface BootResult {
+  /** Hono app with built-in routes (/health_check, /get_attestation). */
+  app: Hono;
+  /** Enclave context: signing, attestation, config, crypto utilities. */
+  ctx: NautilusContext;
+}
+
 /** Spawn the traffic proxy as a child process. */
 function startTrafficProxy(config: BootConfig, httpPort: number): void {
   const proxyConfig = JSON.stringify({
@@ -102,12 +96,7 @@ function startTrafficProxy(config: BootConfig, httpPort: number): void {
 }
 
 /**
- * Boot the enclave and return a context object.
- *
- * Use this when you want to bring your own HTTP framework
- * (Hono, Elysia, or bare Bun.serve). Nautilus handles enclave
- * boot, networking, key generation, and attestation — you
- * handle routing.
+ * Boot the enclave and return a Hono app with context.
  *
  * In enclave mode:
  *   1. Set up loopback networking
@@ -116,8 +105,11 @@ function startTrafficProxy(config: BootConfig, httpPort: number): void {
  *
  * In dev mode:
  *   1. Read config from file or use defaults
+ *
+ * Returns a Hono app with built-in routes and error handling,
+ * plus the NautilusContext for signing and attestation.
  */
-export async function boot(options: BootOptions = {}): Promise<NautilusContext> {
+export async function boot(options: BootOptions = {}): Promise<BootResult> {
   const port = options.port ?? 3000;
   const inEnclave = options._testAsEnclave || isEnclave();
   let config: BootConfig;
@@ -143,7 +135,7 @@ export async function boot(options: BootOptions = {}): Promise<NautilusContext> 
   console.log(`[nautilus] public key: ${publicKey}`);
   console.log(`[nautilus] address:    ${address}`);
 
-  return {
+  const ctx: NautilusContext = {
     publicKey,
     address,
     config,
@@ -156,154 +148,33 @@ export async function boot(options: BootOptions = {}): Promise<NautilusContext> 
     sha256: sha256Hash,
     shutdown: () => stopNsmProxy(),
   };
-}
 
-// ---------------------------------------------------------------------------
-// Built-in server (batteries-included option)
-// ---------------------------------------------------------------------------
+  // Create Hono app with built-in routes and error handling
+  const app = new Hono();
 
-type RouteHandler = (
-  req: Request,
-  ctx: NautilusContext,
-) => Response | Promise<Response>;
+  app.get("/", (c) => c.text("Pong!"));
 
-interface Route {
-  method: string;
-  path: string;
-  handler: RouteHandler;
-}
+  app.get("/health_check", (c) =>
+    c.json({ pk: ctx.publicKey, address: ctx.address }),
+  );
 
-export class Nautilus {
-  private routes: Route[] = [];
-  private port = 3000;
-  private maxBodySize = Number(process.env.MAX_BODY_SIZE) || 10 * 1024 * 1024;
-  private configPath?: string;
-  private server?: ReturnType<typeof Bun.serve>;
-  private ctx?: NautilusContext;
-  /** @internal Override enclave detection for testing error suppression. */
-  _testAsEnclave = false;
+  app.get("/get_attestation", async (c) => {
+    const doc = await ctx.attest();
+    if (!doc) {
+      return c.json({ error: "not running in enclave" }, 503);
+    }
+    return c.json({ attestation: toHex(doc) });
+  });
 
-  /** Actual port the server is listening on (useful when port 0 is used). */
-  get listeningPort(): number | undefined {
-    return this.server?.port;
-  }
+  app.onError((err, c) => {
+    console.error(`[nautilus] ${c.req.method} ${c.req.path} error:`, err);
+    return c.json(
+      { error: inEnclave ? "internal error" : (err.message ?? "internal error") },
+      500,
+    );
+  });
 
-  /** Stop the HTTP server and clean up resources. */
-  stop(): void {
-    this.server?.stop(true);
-    this.server = undefined;
-    this.ctx?.shutdown();
-    this.ctx = undefined;
-  }
+  app.notFound((c) => c.json({ error: "not found" }, 404));
 
-  /**
-   * Register a route handler.
-   */
-  route(method: string, path: string, handler: RouteHandler): this {
-    this.routes.push({ method: method.toUpperCase(), path, handler });
-    return this;
-  }
-
-  /** Shorthand for GET routes. */
-  get(path: string, handler: RouteHandler): this {
-    return this.route("GET", path, handler);
-  }
-
-  /** Shorthand for POST routes. */
-  post(path: string, handler: RouteHandler): this {
-    return this.route("POST", path, handler);
-  }
-
-  /** Set the server port (default: 3000). */
-  setPort(port: number): this {
-    this.port = port;
-    return this;
-  }
-
-  /** Set max request body size in bytes (default: 10MB). */
-  setMaxBodySize(bytes: number): this {
-    this.maxBodySize = bytes;
-    return this;
-  }
-
-  /** Set a local config file path for dev mode. */
-  setDevConfig(path: string): this {
-    this.configPath = path;
-    return this;
-  }
-
-  /**
-   * Boot the enclave and start the built-in HTTP server.
-   */
-  async start(): Promise<void> {
-    const ctx = await boot({
-      port: this.port,
-      devConfigPath: this.configPath,
-      _testAsEnclave: this._testAsEnclave,
-    });
-    this.ctx = ctx;
-
-    // Built-in routes
-    this.get("/health_check", (_req, ctx) => {
-      return Response.json({
-        pk: ctx.publicKey,
-        address: ctx.address,
-      });
-    });
-
-    this.get("/get_attestation", async (_req, ctx) => {
-      const doc = await ctx.attest();
-      if (!doc) {
-        return Response.json(
-          { error: "not running in enclave" },
-          { status: 503 },
-        );
-      }
-      return Response.json({ attestation: toHex(doc) });
-    });
-
-    this.get("/", () => new Response("Pong!"));
-
-    // Start HTTP server
-    const routes = this.routes;
-    const inEnclave = ctx.inEnclave;
-    this.server = Bun.serve({
-      port: this.port,
-      hostname: "127.0.0.1",
-      maxRequestBodySize: this.maxBodySize,
-      development: false,
-      async fetch(req) {
-        const url = new URL(req.url);
-        const method = req.method;
-        const path = url.pathname;
-
-        const route = routes.find(
-          (r) => r.method === method && r.path === path,
-        );
-
-        if (!route) {
-          return Response.json({ error: "not found" }, { status: 404 });
-        }
-
-        try {
-          return await route.handler(req, ctx);
-        } catch (e: any) {
-          console.error(`[nautilus] ${method} ${path} error:`, e);
-          return Response.json(
-            { error: inEnclave ? "internal error" : (e.message ?? "internal error") },
-            { status: 500 },
-          );
-        }
-      },
-      error(err) {
-        console.error("[nautilus] unhandled server error:", err);
-        return Response.json(
-          { error: "internal server error" },
-          { status: 500 },
-        );
-      },
-    });
-
-    console.log(`[nautilus] listening on 127.0.0.1:${this.server.port}`);
-  }
+  return { app, ctx };
 }

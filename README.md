@@ -13,7 +13,7 @@ Write your enclave business logic in TypeScript using Mysten's SDKs (`@mysten/su
 │  │ traffic-proxy│     │ nautilus-server           │    │
 │  │ (Go)         │     │ (Bun compiled binary)     │    │
 │  │              │     │  Your TS business logic   │    │
-│  │ VSOCK:3000 ──┼─TCP─┤► Bun.serve() on :3000    │    │
+│  │ VSOCK:3000 ──┼─TCP─┤► Hono app on :3000        │    │
 │  │              │     │  @mysten/sui, @mysten/seal│    │
 │  │ TCP:443 ◄────┼─────┤► fetch("https://...")     │    │
 │  │  ↕ VSOCK     │     │                           │    │
@@ -104,7 +104,7 @@ ssh ec2-user@<host> "cd nautilus-ts && scripts/deploy.sh"
 ```
 src/
   server.ts          # Your application entry point
-  nautilus.ts        # Framework: boot(), Nautilus class, context
+  nautilus.ts        # Framework: boot(), Hono app, NautilusContext
   core/
     config.ts        # Boot config via traffic-proxy VSOCK:7777
     network.ts       # Loopback interface setup
@@ -143,20 +143,12 @@ The enclave receives configuration at boot via VSOCK port 7777:
 
 ## Writing Routes
 
-Nautilus supports two patterns: bring your own framework, or use the built-in router.
-
-### With Hono (recommended)
+`boot()` returns a [Hono](https://hono.dev) app with built-in routes (`/health_check`, `/get_attestation`) and error handling, plus a `ctx` object for signing and attestation.
 
 ```ts
 import { boot } from "./nautilus.ts";
-import { Hono } from "hono";
 
-const ctx = await boot({ port: 3000 });
-const app = new Hono();
-
-app.get("/health_check", (c) =>
-  c.json({ pk: ctx.publicKey, address: ctx.address }),
-);
+const { app, ctx } = await boot({ port: 3000 });
 
 app.post("/process", async (c) => {
   const body = await c.req.json();
@@ -172,47 +164,9 @@ app.post("/process", async (c) => {
 export default { port: 3000, hostname: "127.0.0.1", fetch: app.fetch };
 ```
 
-### With Elysia
-
-```ts
-import { boot } from "./nautilus.ts";
-import { Elysia } from "elysia";
-
-const ctx = await boot({ port: 3000 });
-
-new Elysia()
-  .get("/health_check", () => ({ pk: ctx.publicKey, address: ctx.address }))
-  .post("/process", async ({ body }) => ({
-    result: "processed",
-    publicKey: ctx.publicKey,
-  }))
-  .listen({ port: 3000, hostname: "127.0.0.1" });
-```
-
-### Built-in router (no dependencies)
-
-```ts
-import { Nautilus } from "./nautilus.ts";
-
-const app = new Nautilus();
-
-app.post("/process", async (req, ctx) => {
-  const body = await req.json();
-  const signature = ctx.sign(ctx.blake2b256(new Uint8Array(body.data)));
-
-  return Response.json({
-    result: "processed",
-    signature: ctx.toHex(signature),
-    publicKey: ctx.publicKey,
-  });
-});
-
-app.start();
-```
-
 ### Context API
 
-The `boot()` function and `Nautilus` class both provide a `NautilusContext` with:
+The `ctx` object provides:
 
 - `ctx.sign(bytes)` — Ed25519 signature with ephemeral keypair
 - `ctx.publicKey` / `ctx.address` — Hex-encoded public key and Sui address
@@ -306,7 +260,7 @@ Yes. `bun run dev` starts the server in dev mode — no enclave, no VSOCK, no NS
 135 tests across TypeScript, Go, and Rust cover every security boundary and functional path. Run all tests with:
 
 ```bash
-bun test                                                    # TypeScript (113 tests)
+bun test                                                    # TypeScript (112 tests)
 go test -v ./... -C tools/traffic-proxy                     # Go (9 tests)
 cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests)
 ```
@@ -357,7 +311,7 @@ cargo test --locked --manifest-path tools/nsm-proxy/Cargo.toml  # Rust (16 tests
 - **Error suppression in enclave mode** — Exceptions return generic "internal error" (not the actual message) when running as enclave; dev mode exposes the real message.
 - **Concurrent requests** — 50 concurrent health checks return consistent results; mixed concurrent GET/POST requests resolve correctly without interference.
 - **Path normalization** — Trailing slashes return 404 (exact match), query strings don't affect routing, double slashes are normalized by the URL parser.
-- **Standalone boot()** — `boot()` returns a valid context with all crypto functions, context can sign and verify, context works with a custom `Bun.serve()` instance (framework-agnostic pattern).
+- **Standalone boot()** — `boot()` returns a valid context with all crypto functions, context can sign and verify independently.
 
 ### TypeScript — NSM Proxy Client (`tests/nsm.test.ts`)
 

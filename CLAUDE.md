@@ -10,7 +10,7 @@ Use Bun instead of Node.js. No `bun:ffi` — native boundaries use companion bin
 
 - `src/core/` — Platform layer (VSOCK, networking, crypto, config)
 - `src/nsm/` — NSM attestation via persistent Rust proxy process
-- `src/nautilus.ts` — Framework class with route registration
+- `src/nautilus.ts` — boot() function, Hono app setup, NautilusContext
 - `src/server.ts` — Application entry point (user code)
 - `tools/nsm-proxy/` — Rust binary for NSM /dev/nsm attestation and RNG
 - `tools/traffic-proxy/` — Go binary for TCP↔VSOCK bridging and config delivery
@@ -23,7 +23,7 @@ Use Bun instead of Node.js. No `bun:ffi` — native boundaries use companion bin
 - Config via VSOCK:7777 at boot (dynamic, not baked into image)
 - `bun build --compile` for single-binary output
 - `nit.target=/nautilus-server` — Bun binary runs directly as init target
-- `Bun.serve()` for HTTP — no Express, no Elysia
+- Hono for HTTP routing, served via Bun
 
 ## Build
 

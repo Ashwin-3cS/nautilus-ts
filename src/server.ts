@@ -1,15 +1,18 @@
 /**
- * Example Nautilus server — built-in router.
+ * Example Nautilus server.
  *
- * This file shows the batteries-included approach.
- * For Hono/Elysia usage, see the "Writing Routes" section in README.md.
+ * This file is a starting point — add your routes below.
  */
 
-import { Nautilus } from "./nautilus.ts";
+import { boot } from "./nautilus.ts";
 
-const app = new Nautilus();
+const { app, ctx } = await boot({ port: 3000 });
 
 // Add your routes here:
-// app.post("/my_endpoint", async (req, ctx) => { ... });
+// app.post("/my_endpoint", async (c) => {
+//   const body = await c.req.json();
+//   const sig = ctx.sign(ctx.blake2b256(data));
+//   return c.json({ signature: ctx.toHex(sig) });
+// });
 
-app.start();
+export default { port: 3000, hostname: "127.0.0.1", fetch: app.fetch };

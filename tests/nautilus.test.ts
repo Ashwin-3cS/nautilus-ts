@@ -1,32 +1,35 @@
 /**
  * Integration tests for the Nautilus framework.
  *
- * Tests the HTTP server, built-in routes, custom routes, error handling,
- * and body size enforcement. Uses Bun.serve() in dev mode.
+ * Tests boot(), built-in Hono routes, custom routes, error handling,
+ * and body size enforcement.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createServer } from "net";
-import { Nautilus, boot } from "../src/nautilus.ts";
+import { boot } from "../src/nautilus.ts";
 import type { NautilusContext } from "../src/nautilus.ts";
+import type { Hono } from "hono";
 
 let baseUrl: string;
-let app: Nautilus;
+let app: Hono;
+let ctx: NautilusContext;
+let server: ReturnType<typeof Bun.serve>;
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
-    const server = createServer();
+    const srv = createServer();
 
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const address = srv.address();
       if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to resolve ephemeral port")));
+        srv.close(() => reject(new Error("failed to resolve ephemeral port")));
         return;
       }
 
       const { port } = address;
-      server.close((err) => {
+      srv.close((err) => {
         if (err) {
           reject(err);
           return;
@@ -38,41 +41,48 @@ async function getFreePort(): Promise<number> {
 }
 
 beforeAll(async () => {
-  app = new Nautilus();
-  app.setPort(await getFreePort());
-  app.setMaxBodySize(1024); // 1KB limit for testing
+  const result = await boot();
+  app = result.app;
+  ctx = result.ctx;
 
-  // Custom routes
-  app.get("/echo", (req, ctx) => {
-    return Response.json({ pk: ctx.publicKey, address: ctx.address });
+  // Custom test routes
+  app.get("/echo", (c) => {
+    return c.json({ pk: ctx.publicKey, address: ctx.address });
   });
 
-  app.post("/sign", async (req, ctx) => {
-    const body = await req.arrayBuffer();
+  app.post("/sign", async (c) => {
+    const body = await c.req.arrayBuffer();
     const data = new Uint8Array(body);
     const sig = ctx.sign(ctx.blake2b256(data));
-    return Response.json({
+    return c.json({
       hash: ctx.toHex(ctx.blake2b256(data)),
       signature: ctx.toHex(sig),
       public_key: ctx.publicKey,
     });
   });
 
-  app.post("/json_echo", async (req, ctx) => {
-    const body = await req.json();
-    return Response.json({ received: body, inEnclave: ctx.inEnclave });
+  app.post("/json_echo", async (c) => {
+    const body = await c.req.json();
+    return c.json({ received: body, inEnclave: ctx.inEnclave });
   });
 
   app.get("/throws", () => {
     throw new Error("intentional test error");
   });
 
-  await app.start();
-  baseUrl = `http://127.0.0.1:${app.listeningPort}`;
+  const port = await getFreePort();
+  server = Bun.serve({
+    port,
+    hostname: "127.0.0.1",
+    maxRequestBodySize: 1024, // 1KB limit for testing
+    fetch: app.fetch,
+  });
+  baseUrl = `http://127.0.0.1:${server.port}`;
 });
 
 afterAll(() => {
-  app?.stop();
+  server?.stop(true);
+  ctx?.shutdown();
 });
 
 describe("built-in routes", () => {
@@ -249,23 +259,31 @@ describe("security", () => {
 });
 
 describe("error suppression in enclave mode", () => {
-  let enclaveApp: Nautilus;
+  let enclaveServer: ReturnType<typeof Bun.serve>;
+  let enclaveCtx: NautilusContext;
   let enclaveUrl: string;
 
   beforeAll(async () => {
-    enclaveApp = new Nautilus();
-    enclaveApp._testAsEnclave = true;
-    enclaveApp.setPort(await getFreePort());
+    const result = await boot({ _testAsEnclave: true });
+    enclaveCtx = result.ctx;
 
-    enclaveApp.get("/throws", () => {
+    result.app.get("/throws", () => {
       throw new Error("secret implementation detail");
     });
 
-    await enclaveApp.start();
-    enclaveUrl = `http://127.0.0.1:${enclaveApp.listeningPort}`;
+    const port = await getFreePort();
+    enclaveServer = Bun.serve({
+      port,
+      hostname: "127.0.0.1",
+      fetch: result.app.fetch,
+    });
+    enclaveUrl = `http://127.0.0.1:${enclaveServer.port}`;
   });
 
-  afterAll(() => enclaveApp?.stop());
+  afterAll(() => {
+    enclaveServer?.stop(true);
+    enclaveCtx?.shutdown();
+  });
 
   test("hides exception message in enclave mode", async () => {
     const res = await fetch(`${enclaveUrl}/throws`);
@@ -339,12 +357,7 @@ describe("path normalization", () => {
 });
 
 describe("standalone boot()", () => {
-  let ctx: NautilusContext;
-
-  afterAll(() => ctx?.shutdown());
-
-  test("returns a valid context", async () => {
-    ctx = await boot();
+  test("ctx provides all expected functions", () => {
     expect(ctx.publicKey).toMatch(/^[0-9a-f]{64}$/);
     expect(ctx.address).toMatch(/^0x[0-9a-f]{64}$/);
     expect(ctx.inEnclave).toBe(false);
@@ -358,7 +371,7 @@ describe("standalone boot()", () => {
     expect(typeof ctx.sha256).toBe("function");
   });
 
-  test("context can sign and verify", async () => {
+  test("ctx can sign and verify", async () => {
     const msg = ctx.blake2b256(new Uint8Array([1, 2, 3]));
     const sig = ctx.sign(msg);
     expect(sig).toBeInstanceOf(Uint8Array);
@@ -366,25 +379,5 @@ describe("standalone boot()", () => {
 
     const { verify, fromHex } = await import("../src/core/crypto.ts");
     expect(verify(fromHex(ctx.publicKey), msg, sig)).toBe(true);
-  });
-
-  test("context works with custom Bun.serve()", async () => {
-    const port = await getFreePort();
-    const server = Bun.serve({
-      port,
-      hostname: "127.0.0.1",
-      fetch(req) {
-        return Response.json({ pk: ctx.publicKey, address: ctx.address });
-      },
-    });
-
-    try {
-      const res = await fetch(`http://127.0.0.1:${server.port}/anything`);
-      const data = await res.json();
-      expect(data.pk).toBe(ctx.publicKey);
-      expect(data.address).toBe(ctx.address);
-    } finally {
-      server.stop(true);
-    }
   });
 });
