@@ -67,7 +67,8 @@ touch /tmp/enclave-ready
 USERDATA
 
 # Launch spot instance
-echo "[ci] launching $INSTANCE_TYPE spot instance"
+SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+echo "[ci] launching $INSTANCE_TYPE spot instance for $SHORT_SHA"
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id "$AMI_ID" \
   --instance-type "$INSTANCE_TYPE" \
@@ -78,7 +79,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --enclave-options 'Enabled=true' \
   --instance-market-options 'MarketType=spot,SpotOptions={SpotInstanceType=one-time}' \
   --user-data "file://$USER_DATA_FILE" \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=nautilus-ci-smoke}]' \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=nautilus-ci-smoke-${SHORT_SHA}}]" \
   --query 'Instances[0].InstanceId' --output text)
 rm -f "$USER_DATA_FILE"
 echo "[ci] instance: $INSTANCE_ID"
