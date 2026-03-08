@@ -105,8 +105,8 @@ export async function receiveBootConfig(): Promise<BootConfig> {
 
   // Secrets are available to handlers via ctx.config.secrets —
   // we intentionally do NOT inject them into process.env to prevent
-  // the host from overwriting internal env vars (e.g. NSM_LIB_PATH,
-  // which is read when resolving the NSM FFI library).
+  // the host from overwriting internal env vars (e.g. NSM_HELPER_PATH,
+  // which is read when resolving the NSM helper binary).
   // NOTE: this is a breaking change for apps that read boot secrets
   // from process.env — use ctx.config.secrets instead.
   if (config.secrets) {

@@ -3,7 +3,7 @@
  *
  * Only used for one-shot config reception at boot (VSOCK:7777).
  * All persistent bridging (inbound HTTP, outbound traffic forwarders)
- * is handled by the Rust traffic-forwarder binary.
+ * is handled by the traffic-forwarder binary.
  *
  * AF_VSOCK constants (Linux):
  *   AF_VSOCK        = 40

@@ -1,6 +1,6 @@
-module github.com/unconfirmedlabs/nautilus-ts/host/forwarder
+module github.com/unconfirmedlabs/nautilus-ts/forwarder
 
-go 1.25.0
+go 1.23.0
 
 require github.com/mdlayher/vsock v1.2.1
 

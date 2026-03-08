@@ -6,14 +6,39 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { createServer } from "net";
 import { Nautilus } from "../src/nautilus.ts";
 
 let baseUrl: string;
 let app: Nautilus;
 
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("failed to resolve ephemeral port")));
+        return;
+      }
+
+      const { port } = address;
+      server.close((err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
 beforeAll(async () => {
   app = new Nautilus();
-  app.setPort(0); // ephemeral port — avoids conflicts
+  app.setPort(await getFreePort());
   app.setMaxBodySize(1024); // 1KB limit for testing
 
   // Custom routes

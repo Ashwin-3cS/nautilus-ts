@@ -2,11 +2,16 @@
  * Tests for NSM module.
  *
  * We can't test actual NSM attestation (requires /dev/nsm in a Nitro Enclave),
- * but we can test the detection logic and graceful fallback behavior.
+ * but we can test the detection logic, graceful fallback behavior, and the
+ * NsmHelperClient protocol over a mock helper subprocess.
  */
 
-import { describe, test, expect } from "bun:test";
-import { isEnclave, getAttestation, getHardwareRandom } from "../src/nsm/index.ts";
+import { describe, test, expect, afterEach } from "bun:test";
+import { isEnclave, getAttestation, getHardwareRandom, NsmHelperClient } from "../src/nsm/index.ts";
+import { toHex, fromHex } from "../src/core/crypto.ts";
+import { resolve } from "path";
+
+const MOCK_HELPER = resolve(import.meta.dir, "fixtures/mock-nsm-helper.ts");
 
 describe("isEnclave", () => {
   test("returns false outside enclave", () => {
@@ -20,15 +25,84 @@ describe("isEnclave", () => {
 });
 
 describe("getAttestation", () => {
-  test("returns null outside enclave", () => {
+  test("returns null outside enclave", async () => {
     const kp = new Uint8Array(32);
     crypto.getRandomValues(kp);
-    expect(getAttestation(kp)).toBeNull();
+    expect(await getAttestation(kp)).toBeNull();
   });
 });
 
 describe("getHardwareRandom", () => {
-  test("returns null outside enclave", () => {
-    expect(getHardwareRandom()).toBeNull();
+  test("returns null outside enclave", async () => {
+    expect(await getHardwareRandom()).toBeNull();
+  });
+});
+
+describe("NsmHelperClient", () => {
+  let client: NsmHelperClient;
+
+  afterEach(() => {
+    client?.stop();
+  });
+
+  test("getAttestation round-trips public key through helper", async () => {
+    client = new NsmHelperClient("bun", [MOCK_HELPER]);
+    const publicKey = new Uint8Array(32);
+    crypto.getRandomValues(publicKey);
+
+    const result = await client.getAttestation(publicKey);
+    // Mock echoes the public key back as the "attestation document"
+    expect(toHex(result)).toBe(toHex(publicKey));
+  });
+
+  test("getRandom returns bytes from helper", async () => {
+    client = new NsmHelperClient("bun", [MOCK_HELPER]);
+    const result = await client.getRandom();
+
+    expect(toHex(result)).toBe("deadbeefcafebabe0123456789abcdef");
+  });
+
+  test("multiplexed concurrent requests resolve correctly", async () => {
+    client = new NsmHelperClient("bun", [MOCK_HELPER]);
+
+    const keys = Array.from({ length: 10 }, () => {
+      const k = new Uint8Array(32);
+      crypto.getRandomValues(k);
+      return k;
+    });
+
+    const results = await Promise.all([
+      ...keys.map((k) => client.getAttestation(k)),
+      ...Array.from({ length: 5 }, () => client.getRandom()),
+    ]);
+
+    // First 10: attestation results should match input keys
+    for (let i = 0; i < 10; i++) {
+      expect(toHex(results[i])).toBe(toHex(keys[i]));
+    }
+    // Last 5: random results should all be the mock constant
+    for (let i = 10; i < 15; i++) {
+      expect(toHex(results[i])).toBe("deadbeefcafebabe0123456789abcdef");
+    }
+  });
+
+  test("rejects pending requests when helper exits", async () => {
+    // Use a helper that reads stdin but never responds, so the request stays pending
+    client = new NsmHelperClient("bun", ["-e", "await Bun.sleep(999999)"]);
+
+    const promise = client.getAttestation(new Uint8Array(32));
+    await Bun.sleep(10);
+    client.stop();
+
+    expect(promise).rejects.toThrow();
+  });
+
+  test("rejects requests after helper has exited", async () => {
+    client = new NsmHelperClient("bun", [MOCK_HELPER]);
+    client.stop();
+    // Small delay for the exit handler to fire
+    await Bun.sleep(10);
+
+    expect(client.getAttestation(new Uint8Array(32))).rejects.toThrow("not running");
   });
 });

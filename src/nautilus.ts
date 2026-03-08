@@ -20,7 +20,6 @@
 
 import {
   type BootConfig,
-  type Keypair,
   receiveBootConfig,
   devBootConfig,
   setupLoopback,
@@ -32,7 +31,7 @@ import {
   blake2b256,
   sha256Hash,
 } from "./core/index.ts";
-import { isEnclave, getAttestation, getHardwareRandom } from "./nsm/index.ts";
+import { isEnclave, getAttestation, getHardwareRandom, stopNsmHelper } from "./nsm/index.ts";
 
 export interface NautilusContext {
   /** Hex-encoded public key. */
@@ -46,7 +45,7 @@ export interface NautilusContext {
   /** Sign bytes with the ephemeral keypair. */
   sign(message: Uint8Array): Uint8Array;
   /** Get NSM attestation document (null if not in enclave). */
-  attest(): Uint8Array | null;
+  attest(): Promise<Uint8Array | null>;
   /** Hex encode. */
   toHex: typeof toHex;
   /** Hex decode. */
@@ -84,6 +83,7 @@ export class Nautilus {
   stop(): void {
     this.server?.stop(true);
     this.server = undefined;
+    stopNsmHelper();
   }
 
   /**
@@ -122,7 +122,7 @@ export class Nautilus {
     return this;
   }
 
-  /** Spawn the Rust traffic forwarder as a child process. */
+  /** Spawn the traffic forwarder as a child process. */
   private startTrafficForwarder(config: BootConfig, httpPort: number): void {
     const forwarderConfig = JSON.stringify({
       http_vsock_port: httpPort,
@@ -130,7 +130,7 @@ export class Nautilus {
       endpoints: config.endpoints,
     });
 
-    const proc = Bun.spawn(["/traffic-forwarder"], {
+    const proc = Bun.spawn(["/traffic-forwarder", "enclave"], {
       stdin: new Blob([forwarderConfig]),
       stdout: "inherit",
       stderr: "inherit",
@@ -150,7 +150,7 @@ export class Nautilus {
    * In enclave mode:
    *   1. Set up loopback networking
    *   2. Receive config from host via VSOCK:7777
-   *   3. Spawn Rust traffic forwarder (handles /etc/hosts, TCP↔VSOCK bridges)
+   *   3. Spawn traffic forwarder (handles /etc/hosts, TCP↔VSOCK bridges)
    *   4. Start HTTP server on TCP:3000
    *
    * In dev mode:
@@ -166,7 +166,7 @@ export class Nautilus {
       setupLoopback();
       config = await receiveBootConfig();
 
-      // Spawn Rust traffic forwarder — handles /etc/hosts, inbound + outbound bridges
+      // Spawn traffic forwarder — handles /etc/hosts, inbound + outbound bridges
       this.startTrafficForwarder(config, this.port);
     } else {
       console.log("[nautilus] booting in dev mode");
@@ -174,7 +174,7 @@ export class Nautilus {
     }
 
     // Generate ephemeral keypair (mix NSM hardware entropy when available)
-    const nsmEntropy = inEnclave ? getHardwareRandom() : null;
+    const nsmEntropy = inEnclave ? await getHardwareRandom() : null;
     const keypair = generateKeypair(nsmEntropy);
     const publicKey = toHex(keypair.publicKey);
     const address = suiAddress(keypair.publicKey);
@@ -203,8 +203,8 @@ export class Nautilus {
       });
     });
 
-    this.get("/get_attestation", (_req, ctx) => {
-      const doc = ctx.attest();
+    this.get("/get_attestation", async (_req, ctx) => {
+      const doc = await ctx.attest();
       if (!doc) {
         return Response.json(
           { error: "not running in enclave" },

@@ -5,13 +5,12 @@
     "": {
       "name": "nautilus-ts",
       "dependencies": {
-        "@mysten/sui": "^2",
-        "@noble/curves": "^2.0.1",
+        "@mysten/sui": "^2.6.0",
         "@noble/ed25519": "^2.2.3",
         "@noble/hashes": "^1.7.2",
       },
       "devDependencies": {
-        "@types/bun": "latest",
+        "@types/bun": "^1.3.10",
       },
     },
   },

@@ -5,8 +5,8 @@
 # Usage: ./scripts/enclave-smoke-test.sh out/nitro.eif [path-to-host-forwarder]
 set -euo pipefail
 
-EIF_PATH="${1:?Usage: $0 <path-to-eif> [host-forwarder-path]}"
-HOST_FORWARDER="${2:-}"
+EIF_PATH="${1:?Usage: $0 <path-to-eif> [forwarder-path]}"
+FORWARDER="${2:-}"
 HTTP_PORT=8080
 VSOCK_HTTP_PORT=3000
 VSOCK_CONFIG_PORT=7777
@@ -46,9 +46,9 @@ echo "[smoke] boot config sent"
 sleep 2
 
 # --- Set up inbound HTTP bridge ---
-if [[ -n "$HOST_FORWARDER" ]]; then
-  echo "[smoke] bridging TCP:$HTTP_PORT → VSOCK:$ENCLAVE_CID:$VSOCK_HTTP_PORT (host-forwarder)"
-  "$HOST_FORWARDER" "$HTTP_PORT" "$ENCLAVE_CID" "$VSOCK_HTTP_PORT" &
+if [[ -n "$FORWARDER" ]]; then
+  echo "[smoke] bridging TCP:$HTTP_PORT → VSOCK:$ENCLAVE_CID:$VSOCK_HTTP_PORT (forwarder)"
+  "$FORWARDER" host "$HTTP_PORT" "$ENCLAVE_CID" "$VSOCK_HTTP_PORT" &
   BRIDGE_PID=$!
 else
   echo "[smoke] bridging TCP:$HTTP_PORT → VSOCK:$ENCLAVE_CID:$VSOCK_HTTP_PORT (socat fallback)"

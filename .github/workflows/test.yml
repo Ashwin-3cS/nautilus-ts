@@ -18,8 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4.2.2
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # pin@stable
-      - run: cargo test --locked --manifest-path enclave/nsm-ffi/Cargo.toml
-      - run: cargo test --locked --manifest-path enclave/traffic-forwarder/Cargo.toml
+      - run: cargo test --locked --manifest-path enclave/nsm-helper/Cargo.toml
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # pin@v5.5.0
+        with:
+          go-version-file: forwarder/go.mod
+      - run: go test -v ./...
+        working-directory: forwarder
 
   build-eif:
     runs-on: ubuntu-latest

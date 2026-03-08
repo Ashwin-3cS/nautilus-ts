@@ -9,10 +9,10 @@ Use Bun instead of Node.js. Use `bun:ffi` for native calls.
 ## Architecture
 
 - `src/core/` — Platform layer (VSOCK, networking, crypto, config)
-- `src/nsm/` — NSM attestation via minimal Rust FFI
+- `src/nsm/` — NSM attestation via persistent Rust helper process
 - `src/nautilus.ts` — Framework class with route registration
 - `src/server.ts` — Application entry point (user code)
-- `enclave/nsm-ffi/` — Minimal Rust cdylib for NSM /dev/nsm ioctl
+- `enclave/nsm-helper/` — Rust binary for NSM /dev/nsm attestation and RNG
 
 ## Key Decisions
 

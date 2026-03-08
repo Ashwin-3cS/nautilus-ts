@@ -2,8 +2,8 @@
 #
 # Architecture:
 #   - Compiled Bun standalone binary (includes all TS/JS deps)
-#   - Rust traffic-forwarder binary (async TCP↔VSOCK bridging)
-#   - Rust .so for NSM attestation (ioctl on /dev/nsm)
+#   - Go traffic-forwarder binary (TCP↔VSOCK bridging with proper half-close)
+#   - Rust nsm-helper binary for attestation and hardware RNG (/dev/nsm)
 #   - No Python, no shell scripts as PID 1
 #   - nit init runs the Bun binary directly
 
@@ -26,10 +26,6 @@ FROM stagex/user-linux-nitro@sha256:aa1006d91a7265b33b86160031daad2fdf54ec2663ed
 FROM stagex/user-cpio@sha256:9c8bf39001eca8a71d5617b46f8c9b4f7426db41a052f198d73400de6f8a16df AS user-cpio
 FROM stagex/user-nit@sha256:60b6eef4534ea6ea78d9f29e4c7feb27407b615424f20ad8943d807191688be7 AS user-nit
 
-# --- Shared libs needed by Bun compiled binary ---
-FROM alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 AS alpine-libs
-RUN apk add --no-cache libstdc++ libgcc
-
 # --- Build Bun standalone binary ---
 FROM oven/bun:1-alpine@sha256:32f1fcccb1523960b254c4f80973bee1a910d60be000a45c20c9129a1efcffee AS bun-deps
 WORKDIR /app
@@ -41,9 +37,9 @@ WORKDIR /app
 COPY --from=bun-deps /app/node_modules /app/node_modules
 COPY src/ /app/src/
 COPY package.json tsconfig.json /app/
-RUN bun build --compile --minify --bytecode --sourcemap --target=bun-linux-x64 ./src/server.ts --outfile nautilus-server
+RUN bun build --compile --minify --bytecode --sourcemap --target=bun-linux-x64-musl ./src/server.ts --outfile nautilus-server
 
-# --- Build Rust components (NSM FFI + traffic forwarder) ---
+# --- Build Rust NSM helper ---
 FROM scratch AS rust-base
 COPY --from=core-busybox . /
 COPY --from=core-musl . /
@@ -60,14 +56,17 @@ COPY --from=core-binutils . /
 COPY --from=core-ca-certificates . /
 
 FROM rust-base AS rust-build
-COPY enclave/nsm-ffi /build/nsm-ffi
-COPY enclave/traffic-forwarder /build/traffic-forwarder
+COPY enclave/nsm-helper /build/nsm-helper
 ENV OPENSSL_STATIC=true
 ENV TARGET=x86_64-unknown-linux-musl
-WORKDIR /build/nsm-ffi
+WORKDIR /build/nsm-helper
 RUN cargo build --release --locked --target "$TARGET"
-WORKDIR /build/traffic-forwarder
-RUN cargo build --release --locked --target "$TARGET"
+
+# --- Build Go forwarder (VSOCK↔TCP bridge) ---
+FROM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS go-build
+WORKDIR /build
+COPY forwarder/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o traffic-forwarder .
 
 # --- Assemble initramfs ---
 FROM scratch AS base
@@ -99,22 +98,25 @@ COPY --from=user-nit /bin/init initramfs
 COPY --from=bun-build /app/nautilus-server initramfs/nautilus-server
 RUN chmod +x initramfs/nautilus-server
 
-# Shared libs needed by Bun binary (resolve lib symlink for target dir)
-RUN mkdir -p initramfs/usr/lib
-COPY --from=alpine-libs /usr/lib/libstdc++.so.6 initramfs/usr/lib/libstdc++.so.6
-COPY --from=alpine-libs /usr/lib/libgcc_s.so.1 initramfs/usr/lib/libgcc_s.so.1
-COPY --from=core-libunwind /usr/lib/libunwind.so.8 initramfs/usr/lib/libunwind.so.8
+# Shared libs needed by Bun binary (libstdc++ and libunwind from StageX musl toolchain)
+RUN mkdir -p initramfs/usr/lib && \
+    cp /usr/lib/libstdc++.so.6 initramfs/usr/lib/ && \
+    cp /usr/lib/libgcc_s.so.1 initramfs/usr/lib/ && \
+    cp /usr/lib/libunwind.so.8 initramfs/usr/lib/
 
-# Rust binaries (from rust-build stage)
-COPY --from=rust-build /build/nsm-ffi/target/x86_64-unknown-linux-musl/release/libnsm_ffi.so initramfs/usr/lib/libnsm_ffi.so
-COPY --from=rust-build /build/traffic-forwarder/target/x86_64-unknown-linux-musl/release/traffic-forwarder initramfs/traffic-forwarder
+# Rust NSM helper
+COPY --from=rust-build /build/nsm-helper/target/x86_64-unknown-linux-musl/release/nsm-helper initramfs/nsm-helper
+RUN chmod +x initramfs/nsm-helper
+
+# Go traffic forwarder (VSOCK↔TCP bridge)
+COPY --from=go-build /build/traffic-forwarder initramfs/traffic-forwarder
 RUN chmod +x initramfs/traffic-forwarder
 
 # Environment
 COPY <<-EOF initramfs/etc/environment
 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 SSL_CERT_DIR=/etc/ssl/certs
-NSM_LIB_PATH=/usr/lib/libnsm_ffi.so
+NSM_HELPER_PATH=/nsm-helper
 LD_LIBRARY_PATH=/usr/lib:/lib
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/
 EOF
