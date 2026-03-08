@@ -314,6 +314,13 @@ type AttestationDoc struct {
 
 func TestAttestationDocBinaryEncode(t *testing.T) {
 	// Matches upstream: test_attestationdoc_binary_encode
+	// Use canonical CBOR encoding (sorted map keys) to match Rust's BTreeMap
+	// deterministic serialization.
+	encMode, err := cbor.CanonicalEncOptions().EncMode()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	pcrs := map[int][]byte{
 		1: {1, 2, 3},
 		2: {4, 5, 6},
@@ -332,8 +339,8 @@ func TestAttestationDocBinaryEncode(t *testing.T) {
 		Nonce:       nil,
 	}
 
-	// Serialize
-	bin1, err := cbor.Marshal(doc1)
+	// Serialize with canonical encoding (sorted keys)
+	bin1, err := encMode.Marshal(doc1)
 	if err != nil {
 		t.Fatalf("marshal doc1: %v", err)
 	}
@@ -344,8 +351,8 @@ func TestAttestationDocBinaryEncode(t *testing.T) {
 		t.Fatalf("unmarshal to doc2: %v", err)
 	}
 
-	// Re-serialize
-	bin2, err := cbor.Marshal(doc2)
+	// Re-serialize with canonical encoding
+	bin2, err := encMode.Marshal(doc2)
 	if err != nil {
 		t.Fatalf("marshal doc2: %v", err)
 	}
