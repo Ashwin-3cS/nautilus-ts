@@ -59,7 +59,8 @@ jobs:
         with:
           go-version-file: tools/traffic-proxy/go.mod
       - name: Build traffic-proxy for host
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o out/traffic-proxy ./tools/traffic-proxy
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../../out/traffic-proxy .
+        working-directory: tools/traffic-proxy
       - name: Run enclave smoke test on EC2 spot
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
