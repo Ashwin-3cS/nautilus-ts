@@ -157,26 +157,31 @@ jobs:
           ssh $SSH_OPTS -i /tmp/deploy_key "$EC2_USER@$EC2_HOST" 'bash -s' << 'REMOTE'
           set -e
           CID=$(sudo nitro-cli describe-enclaves | jq -r '.[0].EnclaveCID')
-          APP_HOME="$HOME/nautilus-app"
 
-          sudo tee /etc/systemd/system/nautilus-argonaut.service > /dev/null <<UNIT
-[Unit]
-Description=Nautilus Argonaut Bridge (port 3000)
-After=network.target
+          sudo tee /etc/systemd/system/nautilus-argonaut.service > /dev/null <<EOF
+          [Unit]
+          Description=Nautilus Argonaut Bridge (port 3000)
+          After=network.target
 
-[Service]
-ExecStart=$APP_HOME/out/argonaut host $CID $APP_HOME/config.json
-Restart=always
-RestartSec=2
+          [Service]
+          ExecStart=$HOME/nautilus-app/out/argonaut host $CID $HOME/nautilus-app/config.json
+          Restart=always
+          RestartSec=2
 
-[Install]
-WantedBy=multi-user.target
-UNIT
+          [Install]
+          WantedBy=multi-user.target
+          EOF
 
           sudo systemctl daemon-reload
           sudo systemctl enable --now nautilus-argonaut.service
           sleep 3
-          sudo systemctl is-active nautilus-argonaut.service
+          if ! sudo systemctl is-active nautilus-argonaut.service; then
+            echo "--- argonaut service failed, showing logs ---"
+            sudo journalctl -u nautilus-argonaut.service --no-pager -n 30
+            cat /etc/systemd/system/nautilus-argonaut.service
+            ls -la $HOME/nautilus-app/out/argonaut || true
+            exit 1
+          fi
           echo "Argonaut bridge active: CID=$CID  port=3000"
           REMOTE
           rm -f /tmp/deploy_key
