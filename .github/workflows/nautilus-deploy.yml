@@ -139,6 +139,8 @@ jobs:
           ssh $SSH_OPTS -i /tmp/deploy_key "$EC2_USER@$EC2_HOST" 'bash -s' << 'REMOTE'
           cat > ~/nautilus-app/config.json <<'EOF'
           {
+            "httpPort": 3000,
+            "httpVsockPort": 8000,
             "endpoints": [],
             "logLevel": "info"
           }
