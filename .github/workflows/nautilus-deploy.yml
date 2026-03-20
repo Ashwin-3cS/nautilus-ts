@@ -140,7 +140,7 @@ jobs:
           cat > ~/nautilus-app/config.json <<'EOF'
           {
             "httpPort": 3000,
-            "httpVsockPort": 8000,
+            "httpVsockPort": 3000,
             "endpoints": [],
             "logLevel": "info"
           }
