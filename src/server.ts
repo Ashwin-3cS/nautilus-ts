@@ -15,11 +15,11 @@ app.get("/health_check", (c) =>
   c.json({ pk: ctx.publicKey, address: ctx.address }),
 );
 
-// Example: sign data
-// app.post("/sign", async (c) => {
-//   const body = await c.req.arrayBuffer();
-//   const sig = ctx.sign(ctx.blake2b256(new Uint8Array(body)));
-//   return c.json({ signature: ctx.toHex(sig) });
-// });
+// Sign arbitrary data — returns ed25519 signature over blake2b256(body)
+app.post("/sign", async (c) => {
+  const body = await c.req.arrayBuffer();
+  const sig = ctx.sign(ctx.blake2b256(new Uint8Array(body)));
+  return c.json({ signature: ctx.toHex(sig) });
+});
 
 export default { port: 3000, hostname: "127.0.0.1", fetch: app.fetch };
