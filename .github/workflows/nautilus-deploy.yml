@@ -93,7 +93,7 @@ jobs:
           SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
           ssh $SSH_OPTS -i /tmp/deploy_key "$EC2_USER@$EC2_HOST" 'bash -s' << 'REMOTE'
           set -e
-          cd ~/nautilus-app && mkdir -p out
+          cd ~/nautilus-app && rm -rf out && mkdir -p out
           sudo make 2>&1 | tee out/build.log
           echo "--- PCR Measurements ---"
           cat out/nitro.pcrs || true
