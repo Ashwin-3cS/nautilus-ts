@@ -96,12 +96,43 @@ scp out/nitro.eif ec2-user@<host>:~/nautilus-ts/out/
 ssh ec2-user@<host> "cd nautilus-ts && scripts/deploy.sh"
 ```
 
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health_check` | Returns public key and Sui address |
+| `GET` | `/attestation` | Returns NSM attestation document (hex) |
+| `POST` | `/sign` | Signs body with Ed25519 over blake2b256, returns hex signature |
+| `GET` | `/logs` | Returns recent log lines from the in-memory ring buffer |
+
+### `GET /logs`
+```
+GET /logs?lines=50
+```
+```json
+{
+  "lines": [
+    "2025-03-23T10:00:01.000Z INFO  [nautilus] booting in dev mode",
+    "2025-03-23T10:00:01.001Z INFO  [nautilus] public key: abc123..."
+  ],
+  "count": 2
+}
+```
+
+Returns the most recent `lines` log entries (default: 100, max: 1000) from an in-memory ring buffer. All `console.log` and `console.error` output is captured with timestamps automatically by the framework's boot sequence.
+
+Use from the CLI:
+```bash
+nautilus logs --host <EC2_IP> --template ts -n 50
+nautilus logs --host <EC2_IP> --template ts --follow
+```
+
 ## Project Structure
 
 ```
 src/
   server.ts          # Your application entry point
-  nautilus.ts        # Framework: boot(), Hono app, NautilusContext
+  nautilus.ts        # Framework: boot(), Hono app, NautilusContext, LogBuffer
   core/
     config.ts        # Boot config via argonaut VSOCK:7777
     network.ts       # Loopback interface setup
@@ -138,7 +169,7 @@ The enclave receives configuration at boot via VSOCK port 7777:
 
 ## Writing Routes
 
-`boot()` returns a [Hono](https://hono.dev) app with built-in routes (`/health_check`, `/get_attestation`) and error handling, plus a `ctx` object for signing and attestation.
+`boot()` returns a [Hono](https://hono.dev) app with built-in routes (`/health_check`, `/attestation`, `/logs`) and error handling, plus a `ctx` object for signing and attestation.
 
 ```ts
 import { boot } from "./nautilus.ts";
@@ -293,7 +324,7 @@ go test -v ./... -C argonaut  # Go (49 tests: 19 traffic + 30 NSM)
 
 ### TypeScript — HTTP Framework (`tests/nautilus.test.ts`)
 
-- **Built-in routes** — `GET /` returns "Pong!", `GET /health_check` returns valid pk and address, `GET /get_attestation` returns 503 outside enclave.
+- **Built-in routes** — `GET /` returns "Pong!", `GET /health_check` returns valid pk and address, `GET /get_attestation` returns 503 outside enclave, `GET /logs` returns recent log lines.
 - **Key consistency** — Multiple health_check requests return the same pk and address.
 - **Custom routes** — GET and POST handlers receive context with crypto utilities, JSON echo preserves body.
 - **Signing endpoint** — POST `/sign` produces deterministic 64-byte signatures with valid hashes.

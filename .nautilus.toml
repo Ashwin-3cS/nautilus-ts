@@ -1,0 +1,8 @@
+[project]
+template = "ts"
+
+[sui]
+network = "testnet"
+package_id = "0xae07393a261d686bc7a34ed17eae580efc609ce19b78833df10435d669cae8e5"
+config_object_id = "0x74a8a28e07f92c030b62a756e0abd31106e12e1a8a4b491f3abf2a69545e175c"
+cap_object_id = "0x261f25a82b771f73a303e04104b30170b2fb9e400c582dc479a089920f3ad021"

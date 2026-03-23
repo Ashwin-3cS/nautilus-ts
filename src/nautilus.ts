@@ -57,6 +57,29 @@ export interface NautilusContext {
   shutdown(): void;
 }
 
+// ── In-memory log ring buffer ────────────────────────────────────────
+
+class LogBuffer {
+  private lines: string[] = [];
+  private capacity: number;
+
+  constructor(capacity = 1000) {
+    this.capacity = capacity;
+  }
+
+  push(line: string) {
+    if (this.lines.length >= this.capacity) {
+      this.lines.shift();
+    }
+    this.lines.push(line);
+  }
+
+  recent(n: number): string[] {
+    const capped = Math.min(n, this.lines.length);
+    return this.lines.slice(-capped);
+  }
+}
+
 export interface BootOptions {
   /** Port the HTTP server will listen on (default: 3000). */
   port?: number;
@@ -114,6 +137,24 @@ export async function boot(options: BootOptions = {}): Promise<BootResult> {
   const inEnclave = options._testAsEnclave || isEnclave();
   let config: BootConfig;
 
+  // Set up log capture — intercept console.log/error to feed the ring buffer
+  const logBuffer = new LogBuffer(1000);
+  const origLog = console.log.bind(console);
+  const origError = console.error.bind(console);
+
+  const captureLog = (...args: unknown[]) => {
+    const line = `${new Date().toISOString()} INFO  ${args.map(String).join(" ")}`;
+    logBuffer.push(line);
+    origLog(...args);
+  };
+  const captureError = (...args: unknown[]) => {
+    const line = `${new Date().toISOString()} ERROR ${args.map(String).join(" ")}`;
+    logBuffer.push(line);
+    origError(...args);
+  };
+  console.log = captureLog;
+  console.error = captureError;
+
   if (inEnclave && !options._testAsEnclave) {
     console.log("[nautilus] booting in enclave mode");
     setupLoopback();
@@ -152,6 +193,12 @@ export async function boot(options: BootOptions = {}): Promise<BootResult> {
   // Create Hono app — only NSM attestation is a framework route.
   // The app owns all other routes (health_check, business logic, etc.).
   const app = new Hono();
+
+  app.get("/logs", (c) => {
+    const n = Math.min(Number(c.req.query("lines") ?? 100), 1000);
+    const lines = logBuffer.recent(n);
+    return c.json({ lines, count: lines.length });
+  });
 
   app.get("/attestation", async (c) => {
     const doc = await ctx.attest();
